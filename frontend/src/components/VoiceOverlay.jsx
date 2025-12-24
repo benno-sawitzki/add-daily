@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Slider } from "@/components/ui/slider";
 import { Mic, X, Loader2, Send, Keyboard, Square, Wand2 } from "lucide-react";
 import { motion } from "framer-motion";
 import axios from "axios";
@@ -8,107 +9,99 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Audio Visualizer Component - VU meter style bars
-function AudioVisualizer({ stream, isRecording }) {
+// ============================================
+// VU Meter Ring Component - Apple-like minimal design
+// ============================================
+function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
-  const analyserRef = useRef(null);
-  const prevLevelsRef = useRef([]);
+  const currentLevelRef = useRef(0);
+  const glowLevelRef = useRef(0);
 
   useEffect(() => {
-    if (!stream || !isRecording) {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-      return;
-    }
-
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
-    
-    analyser.fftSize = 64;
-    analyser.smoothingTimeConstant = 0.8;
-    source.connect(analyser);
-    analyserRef.current = analyser;
-
-    const bufferLength = analyser.frequencyBinCount;
-    const dataArray = new Uint8Array(bufferLength);
-    
-    // Initialize previous levels for smoothing
-    const numBars = 24;
-    prevLevelsRef.current = new Array(numBars).fill(0);
-
     const canvas = canvasRef.current;
     if (!canvas) return;
-    
+
     const ctx = canvas.getContext("2d");
-    const centerX = canvas.width / 2;
-    const centerY = canvas.height / 2;
-    const innerRadius = 74;
+    const dpr = window.devicePixelRatio || 1;
+    
+    // Set canvas size with device pixel ratio for crisp rendering
+    canvas.width = size * dpr;
+    canvas.height = size * dpr;
+    ctx.scale(dpr, dpr);
+
+    const centerX = size / 2;
+    const centerY = size / 2;
+    const baseRadius = size / 2 - 20;
 
     const draw = () => {
-      animationRef.current = requestAnimationFrame(draw);
-      analyser.getByteTimeDomainData(dataArray);
+      // Smooth interpolation towards target level
+      const targetLevel = isRecording ? level : 0;
+      currentLevelRef.current += (targetLevel - currentLevelRef.current) * 0.12;
+      
+      // Glow follows with more decay (slower to fade)
+      glowLevelRef.current += (currentLevelRef.current - glowLevelRef.current) * 0.08;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const currentLevel = currentLevelRef.current;
+      const glowLevel = glowLevelRef.current;
 
-      // Calculate RMS volume
-      let sum = 0;
-      for (let i = 0; i < bufferLength; i++) {
-        const val = (dataArray[i] - 128) / 128;
-        sum += val * val;
-      }
-      const rms = Math.sqrt(sum / bufferLength);
-      const volume = Math.min(1, rms * 3);
+      ctx.clearRect(0, 0, size, size);
 
-      // Draw evenly spaced bars around the circle
-      const barWidth = 3;
-      const maxBarHeight = 20;
-      const gapAngle = (Math.PI * 2) / numBars;
-
-      for (let i = 0; i < numBars; i++) {
-        const angle = i * gapAngle - Math.PI / 2;
-        
-        // Create variation based on position and volume
-        const variation = Math.sin(i * 0.5 + Date.now() * 0.003) * 0.3 + 0.7;
-        const targetHeight = volume * maxBarHeight * variation;
-        
-        // Smooth the bar height
-        prevLevelsRef.current[i] += (targetHeight - prevLevelsRef.current[i]) * 0.3;
-        const barHeight = Math.max(4, prevLevelsRef.current[i]);
-        
-        const x1 = centerX + Math.cos(angle) * (innerRadius + 4);
-        const y1 = centerY + Math.sin(angle) * (innerRadius + 4);
-        const x2 = centerX + Math.cos(angle) * (innerRadius + 4 + barHeight);
-        const y2 = centerY + Math.sin(angle) * (innerRadius + 4 + barHeight);
-
-        // Color based on volume level
-        const intensity = barHeight / maxBarHeight;
-        const alpha = 0.5 + intensity * 0.5;
+      // === Outer glow layer (softest, largest) ===
+      if (isRecording && glowLevel > 0.01) {
+        const outerGlowRadius = baseRadius + 8 + glowLevel * 12;
+        const outerGlow = ctx.createRadialGradient(
+          centerX, centerY, baseRadius - 5,
+          centerX, centerY, outerGlowRadius + 15
+        );
+        outerGlow.addColorStop(0, `rgba(244, 63, 94, 0)`);
+        outerGlow.addColorStop(0.4, `rgba(244, 63, 94, ${glowLevel * 0.15})`);
+        outerGlow.addColorStop(0.7, `rgba(244, 63, 94, ${glowLevel * 0.08})`);
+        outerGlow.addColorStop(1, `rgba(244, 63, 94, 0)`);
         
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = `rgba(244, 63, 94, ${alpha})`;
-        ctx.lineWidth = barWidth;
+        ctx.arc(centerX, centerY, outerGlowRadius + 15, 0, Math.PI * 2);
+        ctx.fillStyle = outerGlow;
+        ctx.fill();
+      }
+
+      // === Main ring ===
+      const ringThickness = 3 + currentLevel * 4;
+      const ringRadius = baseRadius + currentLevel * 6;
+      const ringAlpha = isRecording ? (0.3 + currentLevel * 0.7) : 0.15;
+
+      // Ring glow (blur effect)
+      if (isRecording && currentLevel > 0.05) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(244, 63, 94, ${currentLevel * 0.4})`;
+        ctx.lineWidth = ringThickness + 8;
         ctx.lineCap = "round";
+        ctx.filter = "blur(6px)";
+        ctx.stroke();
+        ctx.filter = "none";
+      }
+
+      // Main ring stroke
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
+      ctx.strokeStyle = isRecording 
+        ? `rgba(244, 63, 94, ${ringAlpha})` 
+        : `rgba(148, 163, 184, 0.2)`;
+      ctx.lineWidth = ringThickness;
+      ctx.lineCap = "round";
+      ctx.stroke();
+
+      // === Inner subtle ring (idle indicator) ===
+      if (!isRecording || currentLevel < 0.1) {
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, baseRadius - 2, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(148, 163, 184, ${0.1 - currentLevel * 0.1})`;
+        ctx.lineWidth = 1.5;
         ctx.stroke();
       }
 
-      // Soft glow behind bars
-      const gradient = ctx.createRadialGradient(
-        centerX, centerY, innerRadius,
-        centerX, centerY, innerRadius + 30 + volume * 15
-      );
-      gradient.addColorStop(0, "rgba(244, 63, 94, 0)");
-      gradient.addColorStop(0.5, `rgba(244, 63, 94, ${volume * 0.15})`);
-      gradient.addColorStop(1, "rgba(244, 63, 94, 0)");
-      
-      ctx.beginPath();
-      ctx.arc(centerX, centerY, innerRadius + 30 + volume * 15, 0, Math.PI * 2);
-      ctx.fillStyle = gradient;
-      ctx.fill();
+      animationRef.current = requestAnimationFrame(draw);
     };
 
     draw();
@@ -117,23 +110,82 @@ function AudioVisualizer({ stream, isRecording }) {
       if (animationRef.current) {
         cancelAnimationFrame(animationRef.current);
       }
-      audioContext.close();
     };
-  }, [stream, isRecording]);
-
-  if (!isRecording) return null;
+  }, [level, isRecording, size]);
 
   return (
     <canvas
       ref={canvasRef}
-      width={200}
-      height={200}
+      style={{ width: size, height: size }}
       className="absolute inset-0 pointer-events-none"
-      style={{ left: "-32px", top: "-32px" }}
     />
   );
 }
 
+// ============================================
+// Audio Level Hook - Real mic input via Web Audio API
+// ============================================
+function useAudioLevel(stream, isRecording) {
+  const [level, setLevel] = useState(0);
+  const analyserRef = useRef(null);
+  const audioContextRef = useRef(null);
+  const animationRef = useRef(null);
+
+  useEffect(() => {
+    if (!stream || !isRecording) {
+      setLevel(0);
+      return;
+    }
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.8;
+    source.connect(analyser);
+
+    audioContextRef.current = audioContext;
+    analyserRef.current = analyser;
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    const updateLevel = () => {
+      analyser.getByteTimeDomainData(dataArray);
+
+      // Calculate RMS (root mean square) for accurate loudness
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const val = (dataArray[i] - 128) / 128;
+        sum += val * val;
+      }
+      const rms = Math.sqrt(sum / dataArray.length);
+      
+      // Map RMS to 0-1 range with some boost for sensitivity
+      const normalizedLevel = Math.min(1, rms * 2.5);
+      setLevel(normalizedLevel);
+
+      animationRef.current = requestAnimationFrame(updateLevel);
+    };
+
+    updateLevel();
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
+    };
+  }, [stream, isRecording]);
+
+  return level;
+}
+
+// ============================================
+// Main Voice Overlay Component
+// ============================================
 export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -145,11 +197,21 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [useWhisper, setUseWhisper] = useState(false);
   const [audioStream, setAudioStream] = useState(null);
   
+  // Demo mode state
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoLevel, setDemoLevel] = useState(0);
+  
   const recognitionRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
   const streamRef = useRef(null);
+
+  // Get real audio level from mic
+  const realAudioLevel = useAudioLevel(audioStream, isRecording);
+  
+  // Use demo level when in demo mode, otherwise use real audio level
+  const audioLevel = demoMode ? demoLevel : realAudioLevel;
 
   // Initialize browser speech recognition
   useEffect(() => {
@@ -262,8 +324,8 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     } catch (err) {
       console.error("Microphone error:", err);
       if (err.name === "NotAllowedError") {
-        setError("Microphone access denied. Please use text input.");
-        setUseTextInput(true);
+        setError("Microphone access denied. Please use text input or demo mode.");
+        setDemoMode(true);
       } else {
         setError(`Could not access microphone: ${err.message}`);
       }
@@ -363,6 +425,23 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // Demo mode: start "recording" simulation
+  const startDemoRecording = () => {
+    setIsRecording(true);
+    setRecordingTime(0);
+    timerRef.current = setInterval(() => {
+      setRecordingTime((prev) => prev + 1);
+    }, 1000);
+  };
+
+  const stopDemoRecording = () => {
+    setIsRecording(false);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+  };
+
   const fullTranscript = transcript + interimTranscript;
 
   return (
@@ -427,53 +506,93 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           </div>
         ) : (
           <>
-            <div className="relative mb-8">
-              {/* Audio Visualizer */}
-              <AudioVisualizer stream={audioStream} isRecording={isRecording} />
+            {/* VU Meter + Record Button Container */}
+            <div className="relative mb-8 flex items-center justify-center" style={{ width: 160, height: 160 }}>
+              {/* VU Meter Ring */}
+              <VUMeterRing 
+                level={audioLevel} 
+                isRecording={isRecording} 
+                size={160}
+              />
               
-              {/* Pulse rings when recording (fallback if no audio data) */}
+              {/* Pulse animation when recording (fallback visual) */}
               {isRecording && (
-                <>
-                  <motion.div
-                    className="absolute inset-0 w-36 h-36 rounded-full border border-rose-500/20"
-                    initial={{ scale: 1, opacity: 0.4 }}
-                    animate={{ scale: 1.8, opacity: 0 }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                  />
-                </>
+                <motion.div
+                  className="absolute inset-0 rounded-full border border-rose-500/20"
+                  initial={{ scale: 1, opacity: 0.3 }}
+                  animate={{ scale: 1.4, opacity: 0 }}
+                  transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
+                  style={{ width: 160, height: 160 }}
+                />
               )}
 
+              {/* Record Button */}
               <motion.button
-                onClick={isRecording ? stopRecording : startRecording}
+                onClick={() => {
+                  if (demoMode) {
+                    isRecording ? stopDemoRecording() : startDemoRecording();
+                  } else {
+                    isRecording ? stopRecording() : startRecording();
+                  }
+                }}
                 disabled={isLoading || isTranscribing}
-                className={`relative w-36 h-36 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
+                className={`relative w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
                   isRecording
-                    ? "bg-rose-500 shadow-[0_0_60px_rgba(244,63,94,0.5)]"
+                    ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)]"
                     : isTranscribing
                     ? "bg-card border-2 border-primary/50"
-                    : "bg-card border-2 border-primary/50 hover:border-primary hover:bg-card/80"
+                    : "bg-card border-2 border-border/50 hover:border-primary/50 hover:bg-card/80"
                 }`}
-                whileHover={!isRecording && !isTranscribing ? { scale: 1.05 } : {}}
-                whileTap={{ scale: 0.95 }}
+                whileHover={!isRecording && !isTranscribing ? { scale: 1.03 } : {}}
+                whileTap={{ scale: 0.97 }}
                 data-testid="voice-orb"
               >
                 {isLoading ? (
-                  <Loader2 className="w-10 h-10 text-primary animate-spin" />
+                  <Loader2 className="w-8 h-8 text-primary animate-spin" />
                 ) : isTranscribing ? (
                   <>
-                    <Wand2 className="w-8 h-8 text-primary animate-pulse" />
-                    <span className="text-primary text-xs mt-2">Transcribing...</span>
+                    <Wand2 className="w-7 h-7 text-primary animate-pulse" />
+                    <span className="text-primary text-xs mt-1.5">Transcribing...</span>
                   </>
                 ) : isRecording ? (
                   <>
-                    <Square className="w-8 h-8 text-white fill-white" />
-                    <span className="text-white text-sm mt-2 font-mono">{formatTime(recordingTime)}</span>
+                    <Square className="w-6 h-6 text-white fill-white" />
+                    <span className="text-white text-sm mt-1.5 font-mono">{formatTime(recordingTime)}</span>
                   </>
                 ) : (
-                  <Mic className="w-10 h-10 text-primary" />
+                  <Mic className="w-8 h-8 text-muted-foreground" />
                 )}
               </motion.button>
             </div>
+
+            {/* Demo Mode Controls */}
+            {demoMode && (
+              <div className="w-full max-w-xs mb-6 p-4 bg-card/50 rounded-xl border border-border/30">
+                <div className="flex items-center justify-between mb-3">
+                  <span className="text-xs text-muted-foreground font-medium">Demo Mode</span>
+                  <span className="text-xs text-primary font-mono">{(demoLevel * 100).toFixed(0)}%</span>
+                </div>
+                <Slider
+                  value={[demoLevel]}
+                  onValueChange={(value) => setDemoLevel(value[0])}
+                  min={0}
+                  max={1}
+                  step={0.01}
+                  className="w-full"
+                />
+                <p className="text-xs text-muted-foreground mt-2 text-center">
+                  Drag slider to simulate audio level
+                </p>
+              </div>
+            )}
+
+            {/* Toggle Demo Mode */}
+            <button
+              onClick={() => setDemoMode(!demoMode)}
+              className="text-xs text-muted-foreground hover:text-primary mb-4 transition-colors"
+            >
+              {demoMode ? "Exit Demo Mode" : "Test with Demo Mode"}
+            </button>
 
             <p className="text-lg mb-4 text-center">
               {isLoading ? (
@@ -487,7 +606,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               )}
             </p>
 
-            {useWhisper && !isRecording && !isTranscribing && (
+            {useWhisper && !isRecording && !isTranscribing && !demoMode && (
               <p className="text-xs text-muted-foreground mb-4">
                 Using Whisper AI for transcription
               </p>
