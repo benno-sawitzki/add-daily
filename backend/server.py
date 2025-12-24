@@ -497,6 +497,14 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 os.unlink(tmp_path)
             except:
                 pass
+        
+        # Check for rate limit / quota errors
+        error_str = str(e).lower()
+        if "rate" in error_str and "limit" in error_str or "quota" in error_str:
+            raise HTTPException(
+                status_code=429, 
+                detail="QUOTA_EXCEEDED: Your API quota has been exceeded. Please add credits to your Emergent LLM Key (Profile → Universal Key → Add Balance)."
+            )
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 
