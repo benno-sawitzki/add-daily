@@ -255,6 +255,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
                   <SelectItem value="60">1 hour</SelectItem>
                   <SelectItem value="90">1.5 hours</SelectItem>
                   <SelectItem value="120">2 hours</SelectItem>
+                  <SelectItem value="150">2.5 hours</SelectItem>
                   <SelectItem value="180">3 hours</SelectItem>
                   <SelectItem value="240">4 hours</SelectItem>
                 </SelectContent>
