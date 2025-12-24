@@ -47,13 +47,20 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
 
     recognition.onerror = (event) => {
       console.error("Speech recognition error:", event.error);
-      if (event.error === "not-allowed") {
-        setError("Microphone access denied. Use text input instead.");
-        setUseTextInput(true);
-      } else {
-        setError(`Error: ${event.error}`);
-      }
       setIsListening(false);
+      
+      if (event.error === "not-allowed") {
+        setError("Microphone access denied. Switching to text input.");
+        setUseTextInput(true);
+      } else if (event.error === "network") {
+        setError("Voice recognition unavailable. Please use text input instead.");
+        setUseTextInput(true);
+      } else if (event.error === "no-speech") {
+        setError("No speech detected. Try again or use text input.");
+      } else {
+        setError(`Voice error: ${event.error}. Try text input instead.`);
+        setUseTextInput(true);
+      }
     };
 
     recognition.onend = () => {
