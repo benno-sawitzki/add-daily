@@ -272,6 +272,159 @@ async def root():
 async def health():
     return {"status": "healthy"}
 
+# ============ AUTH ROUTES ============
+@api_router.post("/auth/signup", response_model=AuthResponse)
+async def signup(user_data: UserSignup):
+    """Register a new user with email and password"""
+    # Check if user exists
+    existing = await db.users.find_one({"email": user_data.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    # Create user
+    user = User(
+        email=user_data.email.lower(),
+        name=user_data.name,
+        hashed_password=hash_password(user_data.password)
+    )
+    await db.users.insert_one(user.model_dump())
+    
+    # Generate token
+    token = create_jwt_token(user.id, user.email)
+    
+    return AuthResponse(
+        token=token,
+        user={"id": user.id, "email": user.email, "name": user.name, "avatar_url": user.avatar_url}
+    )
+
+@api_router.post("/auth/login", response_model=AuthResponse)
+async def login(credentials: UserLogin):
+    """Login with email and password"""
+    user = await db.users.find_one({"email": credentials.email.lower()})
+    
+    if not user or not user.get("hashed_password"):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    if not verify_password(credentials.password, user["hashed_password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+    
+    token = create_jwt_token(user["id"], user["email"])
+    
+    return AuthResponse(
+        token=token,
+        user={"id": user["id"], "email": user["email"], "name": user.get("name", ""), "avatar_url": user.get("avatar_url")}
+    )
+
+@api_router.get("/auth/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    """Get current authenticated user"""
+    return user
+
+@api_router.get("/auth/google/url")
+async def get_google_auth_url(redirect_uri: Optional[str] = None):
+    """Get Google OAuth URL for login"""
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    
+    # Use provided redirect_uri or default
+    callback_uri = redirect_uri or GOOGLE_AUTH_REDIRECT_URI
+    
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": callback_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "consent"
+    }
+    
+    from urllib.parse import urlencode
+    auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urlencode(params)}"
+    return {"url": auth_url}
+
+@api_router.post("/auth/google", response_model=AuthResponse)
+async def google_auth(auth_data: GoogleAuthRequest):
+    """Exchange Google auth code for user token"""
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    
+    # Use provided redirect_uri or default
+    callback_uri = auth_data.redirect_uri or GOOGLE_AUTH_REDIRECT_URI
+    
+    # Exchange code for tokens
+    token_response = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "code": auth_data.code,
+            "grant_type": "authorization_code",
+            "redirect_uri": callback_uri
+        }
+    )
+    
+    if token_response.status_code != 200:
+        logger.error(f"Google token exchange failed: {token_response.text}")
+        raise HTTPException(status_code=400, detail="Failed to authenticate with Google")
+    
+    tokens = token_response.json()
+    access_token = tokens.get("access_token")
+    
+    # Get user info from Google
+    user_info_response = requests.get(
+        "https://www.googleapis.com/oauth2/v2/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+    
+    if user_info_response.status_code != 200:
+        raise HTTPException(status_code=400, detail="Failed to get user info from Google")
+    
+    google_user = user_info_response.json()
+    google_id = google_user.get("id")
+    email = google_user.get("email", "").lower()
+    name = google_user.get("name", "")
+    avatar_url = google_user.get("picture")
+    
+    # Check if user exists by google_id or email
+    existing_user = await db.users.find_one({
+        "$or": [{"google_id": google_id}, {"email": email}]
+    })
+    
+    if existing_user:
+        # Update Google info if needed
+        update_data = {"google_id": google_id}
+        if avatar_url:
+            update_data["avatar_url"] = avatar_url
+        if name and not existing_user.get("name"):
+            update_data["name"] = name
+            
+        await db.users.update_one({"id": existing_user["id"]}, {"$set": update_data})
+        user_id = existing_user["id"]
+        user_email = existing_user["email"]
+        user_name = existing_user.get("name") or name
+        user_avatar = avatar_url or existing_user.get("avatar_url")
+    else:
+        # Create new user
+        new_user = User(
+            email=email,
+            name=name,
+            google_id=google_id,
+            avatar_url=avatar_url
+        )
+        await db.users.insert_one(new_user.model_dump())
+        user_id = new_user.id
+        user_email = email
+        user_name = name
+        user_avatar = avatar_url
+    
+    # Generate JWT token
+    token = create_jwt_token(user_id, user_email)
+    
+    return AuthResponse(
+        token=token,
+        user={"id": user_id, "email": user_email, "name": user_name, "avatar_url": user_avatar}
+    )
+
 # Task CRUD
 @api_router.post("/tasks", response_model=Task)
 async def create_task(task_input: TaskCreate):
