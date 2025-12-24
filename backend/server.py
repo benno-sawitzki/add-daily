@@ -25,7 +25,7 @@ load_dotenv(ROOT_DIR / '.env')
 # Google OAuth Config
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-FRONTEND_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://speaktodo-5.preview.emergentagent.com')
+FRONTEND_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://voicetask-8.preview.emergentagent.com')
 # Use shortest possible callback path (no /api prefix)
 GOOGLE_REDIRECT_URI = f"{FRONTEND_URL}/gcal"
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']
