@@ -137,10 +137,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         raise HTTPException(status_code=401, detail="Not authenticated")
     
     payload = decode_jwt_token(credentials.credentials)
-    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "hashed_password": 0})
-    if not user:
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT id, email, name, google_id, avatar_url, created_at FROM users WHERE id = $1",
+            payload["sub"]
+        )
+    if not row:
         raise HTTPException(status_code=401, detail="User not found")
-    return user
+    return dict(row)
 
 async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
     """Get current user if authenticated, otherwise return None"""
@@ -148,8 +153,13 @@ async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(
         return None
     try:
         payload = decode_jwt_token(credentials.credentials)
-        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "hashed_password": 0})
-        return user
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT id, email, name, google_id, avatar_url, created_at FROM users WHERE id = $1",
+                payload["sub"]
+            )
+        return dict(row) if row else None
     except:
         return None
 
