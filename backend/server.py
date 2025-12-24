@@ -3,7 +3,8 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+import asyncpg
+import ssl
 import os
 import logging
 from pathlib import Path
@@ -29,14 +30,21 @@ load_dotenv(ROOT_DIR / '.env')
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
 FRONTEND_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://voicetask-8.preview.emergentagent.com')
-# Use shortest possible callback path (no /api prefix)
 GOOGLE_REDIRECT_URI = f"{FRONTEND_URL}/gcal"
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+# PostgreSQL connection (Supabase)
+DATABASE_URL = os.environ.get('DATABASE_URL')
+db_pool = None
+
+async def get_db_pool():
+    global db_pool
+    if db_pool is None:
+        ssl_ctx = ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = ssl.CERT_NONE
+        db_pool = await asyncpg.create_pool(DATABASE_URL, ssl=ssl_ctx, min_size=1, max_size=10)
+    return db_pool
 
 # Create the main app with docs at /api/docs
 app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")
