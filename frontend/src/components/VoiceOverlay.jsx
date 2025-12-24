@@ -534,18 +534,10 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                 isRecording={isRecording} 
                 size={200}
               />
-              
-              {/* Pulse animation when recording (fallback visual) - removed, VU meter handles this */}
 
               {/* Record Button */}
               <motion.button
-                onClick={() => {
-                  if (demoMode) {
-                    isRecording ? stopDemoRecording() : startDemoRecording();
-                  } else {
-                    isRecording ? stopRecording() : startRecording();
-                  }
-                }}
+                onClick={() => isRecording ? stopRecording() : startRecording()}
                 disabled={isLoading || isTranscribing}
                 className={`relative w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
                   isRecording
@@ -576,35 +568,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               </motion.button>
             </div>
 
-            {/* Demo Mode Controls */}
-            {demoMode && (
-              <div className="w-full max-w-xs mb-6 p-4 bg-card/50 rounded-xl border border-border/30">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs text-muted-foreground font-medium">Demo Mode</span>
-                  <span className="text-xs text-primary font-mono">{(demoLevel * 100).toFixed(0)}%</span>
-                </div>
-                <Slider
-                  value={[demoLevel]}
-                  onValueChange={(value) => setDemoLevel(value[0])}
-                  min={0}
-                  max={1}
-                  step={0.01}
-                  className="w-full"
-                />
-                <p className="text-xs text-muted-foreground mt-2 text-center">
-                  Drag slider to simulate audio level
-                </p>
-              </div>
-            )}
-
-            {/* Toggle Demo Mode */}
-            <button
-              onClick={() => setDemoMode(!demoMode)}
-              className="text-xs text-muted-foreground hover:text-primary mb-4 transition-colors"
-            >
-              {demoMode ? "Exit Demo Mode" : "Test with Demo Mode"}
-            </button>
-
             <p className="text-lg mb-4 text-center">
               {isLoading ? (
                 <span className="text-primary">Processing your tasks...</span>
@@ -617,7 +580,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               )}
             </p>
 
-            {useWhisper && !isRecording && !isTranscribing && !demoMode && (
+            {useWhisper && !isRecording && !isTranscribing && (
               <p className="text-xs text-muted-foreground mb-4">
                 Using Whisper AI for transcription
               </p>
