@@ -7,9 +7,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { 
   GripVertical, 
-  Calendar, 
+  Calendar as CalendarIcon, 
   Clock, 
   Trash2, 
   X,
@@ -17,6 +19,7 @@ import {
   Check
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { format, parseISO } from "date-fns";
 
 const PRIORITY_COLORS = {
   4: "bg-rose-500",
