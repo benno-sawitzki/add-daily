@@ -704,27 +704,27 @@ async def process_voice(voice_input: VoiceInput):
 
 # Settings
 @api_router.get("/settings", response_model=Settings)
-async def get_settings():
-    settings = await db.settings.find_one({"id": "user_settings"}, {"_id": 0})
+async def get_settings(user: dict = Depends(get_current_user)):
+    settings = await db.settings.find_one({"id": f"settings_{user['id']}"}, {"_id": 0})
     if not settings:
-        default_settings = Settings()
+        default_settings = Settings(id=f"settings_{user['id']}")
         await db.settings.insert_one(default_settings.model_dump())
         return default_settings
     return settings
 
 @api_router.patch("/settings", response_model=Settings)
-async def update_settings(settings_update: SettingsUpdate):
+async def update_settings(settings_update: SettingsUpdate, user: dict = Depends(get_current_user)):
     await db.settings.update_one(
-        {"id": "user_settings"},
+        {"id": f"settings_{user['id']}"},
         {"$set": settings_update.model_dump()},
         upsert=True
     )
-    settings = await db.settings.find_one({"id": "user_settings"}, {"_id": 0})
+    settings = await db.settings.find_one({"id": f"settings_{user['id']}"}, {"_id": 0})
     return settings
 
 # Whisper Speech-to-Text endpoint
 @api_router.post("/transcribe")
-async def transcribe_audio(audio: UploadFile = File(...)):
+async def transcribe_audio(audio: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Transcribe audio using OpenAI Whisper"""
     api_key = os.environ.get('EMERGENT_LLM_KEY')
     if not api_key:
