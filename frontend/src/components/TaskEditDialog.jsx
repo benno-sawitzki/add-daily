@@ -203,6 +203,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
                     mode="single"
                     selected={formData.scheduled_date ? parseISO(formData.scheduled_date) : undefined}
                     onSelect={handleDateSelect}
+                    disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
                     initialFocus
                   />
                   {formData.scheduled_date && (
