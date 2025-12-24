@@ -233,6 +233,10 @@ async def process_voice_queue(voice_input: VoiceInput):
         # Create task objects but don't save them yet
         tasks_for_review = []
         for i, task_data in enumerate(result.get("tasks", [])):
+            # Use AI-extracted duration if available, otherwise default to 30 minutes
+            ai_duration = task_data.get("duration")
+            duration = ai_duration if ai_duration and isinstance(ai_duration, (int, float)) and ai_duration > 0 else 30
+            
             task = {
                 "id": str(uuid.uuid4()),
                 "title": task_data.get("title", "Untitled Task"),
@@ -240,7 +244,7 @@ async def process_voice_queue(voice_input: VoiceInput):
                 "urgency": task_data.get("urgency", 2),
                 "importance": task_data.get("importance", 2),
                 "priority": task_data.get("priority", 2),
-                "duration": 30,  # Default 30 minutes
+                "duration": int(duration),  # AI-extracted or default 30 minutes
                 "order": i,
             }
             tasks_for_review.append(task)
