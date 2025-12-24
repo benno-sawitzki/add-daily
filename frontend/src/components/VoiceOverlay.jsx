@@ -8,6 +8,120 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
+// Audio Visualizer Component
+function AudioVisualizer({ stream, isRecording }) {
+  const canvasRef = useRef(null);
+  const animationRef = useRef(null);
+  const analyserRef = useRef(null);
+
+  useEffect(() => {
+    if (!stream || !isRecording) {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      return;
+    }
+
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const analyser = audioContext.createAnalyser();
+    const source = audioContext.createMediaStreamSource(stream);
+    
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.7;
+    source.connect(analyser);
+    analyserRef.current = analyser;
+
+    const bufferLength = analyser.frequencyBinCount;
+    const dataArray = new Uint8Array(bufferLength);
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const ctx = canvas.getContext("2d");
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const radius = 72; // Radius of the recording button
+
+    const draw = () => {
+      animationRef.current = requestAnimationFrame(draw);
+      analyser.getByteFrequencyData(dataArray);
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Calculate average volume
+      const average = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
+      const normalizedAvg = average / 255;
+
+      // Draw multiple rings based on audio level
+      const numBars = 32;
+      const barWidth = 4;
+
+      for (let i = 0; i < numBars; i++) {
+        const angle = (i / numBars) * Math.PI * 2 - Math.PI / 2;
+        
+        // Get frequency data for this bar
+        const freqIndex = Math.floor((i / numBars) * bufferLength);
+        const freqValue = dataArray[freqIndex] / 255;
+        
+        // Bar height based on frequency
+        const barHeight = 10 + freqValue * 35;
+        
+        const x1 = centerX + Math.cos(angle) * (radius + 8);
+        const y1 = centerY + Math.sin(angle) * (radius + 8);
+        const x2 = centerX + Math.cos(angle) * (radius + 8 + barHeight);
+        const y2 = centerY + Math.sin(angle) * (radius + 8 + barHeight);
+
+        // Gradient from rose to orange based on intensity
+        const intensity = freqValue;
+        const r = 244;
+        const g = Math.floor(63 + intensity * 100);
+        const b = Math.floor(94 - intensity * 50);
+        
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.6 + intensity * 0.4})`;
+        ctx.lineWidth = barWidth;
+        ctx.lineCap = "round";
+        ctx.stroke();
+      }
+
+      // Outer glow ring
+      const glowRadius = radius + 50 + normalizedAvg * 20;
+      const gradient = ctx.createRadialGradient(centerX, centerY, radius, centerX, centerY, glowRadius);
+      gradient.addColorStop(0, "rgba(244, 63, 94, 0)");
+      gradient.addColorStop(0.5, `rgba(244, 63, 94, ${normalizedAvg * 0.15})`);
+      gradient.addColorStop(1, "rgba(244, 63, 94, 0)");
+      
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
+      ctx.fill();
+    };
+
+    draw();
+
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+      }
+      audioContext.close();
+    };
+  }, [stream, isRecording]);
+
+  if (!isRecording) return null;
+
+  return (
+    <canvas
+      ref={canvasRef}
+      width={200}
+      height={200}
+      className="absolute inset-0 pointer-events-none"
+      style={{ left: "-32px", top: "-32px" }}
+    />
+  );
+}
+
 export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
@@ -17,6 +131,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [useTextInput, setUseTextInput] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
   const [useWhisper, setUseWhisper] = useState(false);
+  const [audioStream, setAudioStream] = useState(null);
   
   const recognitionRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -56,7 +171,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       recognition.onerror = (event) => {
         console.error("Speech recognition error:", event.error);
         if (event.error === "network" || event.error === "not-allowed") {
-          // Switch to Whisper mode
           setUseWhisper(true);
         }
       };
@@ -92,6 +206,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     if (timerRef.current) {
       clearInterval(timerRef.current);
     }
+    setAudioStream(null);
   };
 
   const startRecording = async () => {
@@ -100,11 +215,10 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     audioChunksRef.current = [];
 
     try {
-      // Get microphone access
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      setAudioStream(stream);
 
-      // Set up media recorder for Whisper fallback
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
       });
@@ -118,7 +232,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       mediaRecorderRef.current = mediaRecorder;
       mediaRecorder.start(1000);
 
-      // Try browser speech recognition for real-time
       if (recognitionRef.current && !useWhisper) {
         try {
           recognitionRef.current.start();
@@ -130,7 +243,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       setIsRecording(true);
       setRecordingTime(0);
 
-      // Start timer
       timerRef.current = setInterval(() => {
         setRecordingTime((prev) => prev + 1);
       }, 1000);
@@ -149,39 +261,34 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const stopRecording = async () => {
     setIsRecording(false);
 
-    // Stop timer
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
-    // Stop browser recognition
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) {}
     }
 
-    // Stop media recorder and get Whisper transcription if needed
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop();
       
-      // Wait for final data
       await new Promise(resolve => {
         mediaRecorderRef.current.onstop = resolve;
       });
 
-      // If no transcript from browser recognition, use Whisper
       const currentTranscript = transcript + interimTranscript;
       if (!currentTranscript.trim() || useWhisper) {
         await transcribeWithWhisper();
       }
     }
 
-    // Stop microphone
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(track => track.stop());
       streamRef.current = null;
     }
-
+    
+    setAudioStream(null);
     setInterimTranscript("");
   };
 
@@ -254,10 +361,8 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       className="voice-overlay flex flex-col items-center justify-center"
       data-testid="voice-overlay"
     >
-      {/* Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-primary/5" />
 
-      {/* Close button */}
       <Button
         variant="ghost"
         size="icon"
@@ -268,9 +373,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         <X className="w-6 h-6" />
       </Button>
 
-      {/* Content */}
       <div className="relative z-10 flex flex-col items-center max-w-2xl w-full px-6">
-        {/* Mode Toggle */}
         {!isLoading && !isTranscribing && (
           <div className="flex gap-2 mb-8">
             <Button
@@ -300,7 +403,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           </div>
         )}
 
-        {/* Text Input Mode */}
         {useTextInput ? (
           <div className="w-full mb-6">
             <Textarea
@@ -313,33 +415,28 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           </div>
         ) : (
           <>
-            {/* Voice Recording UI */}
             <div className="relative mb-8">
-              {/* Pulse rings when recording */}
+              {/* Audio Visualizer */}
+              <AudioVisualizer stream={audioStream} isRecording={isRecording} />
+              
+              {/* Pulse rings when recording (fallback if no audio data) */}
               {isRecording && (
                 <>
                   <motion.div
-                    className="absolute inset-0 w-36 h-36 rounded-full border-2 border-rose-500/30"
-                    initial={{ scale: 1, opacity: 0.6 }}
-                    animate={{ scale: 1.4, opacity: 0 }}
-                    transition={{ duration: 1.5, repeat: Infinity }}
-                  />
-                  <motion.div
-                    className="absolute inset-0 w-36 h-36 rounded-full border-2 border-rose-500/20"
+                    className="absolute inset-0 w-36 h-36 rounded-full border border-rose-500/20"
                     initial={{ scale: 1, opacity: 0.4 }}
-                    animate={{ scale: 1.6, opacity: 0 }}
-                    transition={{ duration: 1.5, repeat: Infinity, delay: 0.3 }}
+                    animate={{ scale: 1.8, opacity: 0 }}
+                    transition={{ duration: 2, repeat: Infinity }}
                   />
                 </>
               )}
 
-              {/* Main button */}
               <motion.button
                 onClick={isRecording ? stopRecording : startRecording}
                 disabled={isLoading || isTranscribing}
-                className={`relative w-36 h-36 rounded-full flex flex-col items-center justify-center transition-all ${
+                className={`relative w-36 h-36 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
                   isRecording
-                    ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)]"
+                    ? "bg-rose-500 shadow-[0_0_60px_rgba(244,63,94,0.5)]"
                     : isTranscribing
                     ? "bg-card border-2 border-primary/50"
                     : "bg-card border-2 border-primary/50 hover:border-primary hover:bg-card/80"
@@ -366,7 +463,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               </motion.button>
             </div>
 
-            {/* Status */}
             <p className="text-lg mb-4 text-center">
               {isLoading ? (
                 <span className="text-primary">Processing your tasks...</span>
@@ -379,19 +475,16 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               )}
             </p>
 
-            {/* Whisper mode indicator */}
             {useWhisper && !isRecording && !isTranscribing && (
               <p className="text-xs text-muted-foreground mb-4">
                 Using Whisper AI for transcription
               </p>
             )}
 
-            {/* Error */}
             {error && (
               <p className="text-amber-500 text-sm mb-4 text-center">{error}</p>
             )}
 
-            {/* Transcript Area */}
             <div className="w-full mb-6">
               <Textarea
                 value={fullTranscript}
@@ -407,7 +500,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           </>
         )}
 
-        {/* Action buttons */}
         <div className="flex gap-4">
           <Button
             variant="outline"
@@ -432,7 +524,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           </Button>
         </div>
 
-        {/* Tip */}
         <p className="mt-8 text-sm text-muted-foreground text-center max-w-md">
           {useTextInput 
             ? "Tip: Mention urgency and importance. Example: \"Call dentist urgently, very important\""
