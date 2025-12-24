@@ -140,7 +140,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         <X className="w-6 h-6" />
       </Button>
 
-      /* Content */}
+      {/* Content */}
       <div className="relative z-10 flex flex-col items-center max-w-2xl w-full px-6">
         {/* Toggle between voice and text */}
         {!isLoading && (
