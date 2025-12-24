@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, CheckCircle2, Trash2 } from "lucide-react";
 import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
