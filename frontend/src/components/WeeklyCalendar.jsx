@@ -11,6 +11,8 @@ const PRIORITY_COLORS = {
   1: "bg-slate-500 text-white",
 };
 
+const SLOT_HEIGHT = 32; // Height of each 30-min slot in pixels
+
 // Generate time slots from 6 AM to 10 PM in 30-min intervals
 const TIME_SLOTS = [];
 for (let hour = 6; hour <= 22; hour++) {
@@ -23,7 +25,10 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [dropTarget, setDropTarget] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [resizing, setResizing] = useState(null);
   const dragTaskRef = useRef(null);
+  const resizeStartY = useRef(null);
+  const resizeStartDuration = useRef(null);
 
   // Update current time every minute
   useEffect(() => {
@@ -47,19 +52,10 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   };
 
   const handleDragStart = (e, task) => {
+    if (resizing) return;
     dragTaskRef.current = task;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("taskId", task.id);
-    
-    // Create custom drag image
-    const dragEl = e.target.cloneNode(true);
-    dragEl.style.position = "absolute";
-    dragEl.style.top = "-1000px";
-    dragEl.style.opacity = "0.9";
-    dragEl.style.transform = "scale(1.05)";
-    document.body.appendChild(dragEl);
-    e.dataTransfer.setDragImage(dragEl, 50, 15);
-    setTimeout(() => document.body.removeChild(dragEl), 0);
   };
 
   const handleDragEnd = () => {
@@ -106,11 +102,49 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   };
 
   const handleTaskClick = (e, task) => {
-    // Only open edit if not dragging
-    if (!dragTaskRef.current) {
+    if (!dragTaskRef.current && !resizing) {
       e.stopPropagation();
       setEditingTask(task);
     }
+  };
+
+  // Resize handlers
+  const handleResizeStart = (e, task) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setResizing(task.id);
+    resizeStartY.current = e.clientY;
+    resizeStartDuration.current = task.duration || 30;
+
+    const handleMouseMove = (moveEvent) => {
+      const deltaY = moveEvent.clientY - resizeStartY.current;
+      const deltaSlots = Math.round(deltaY / SLOT_HEIGHT);
+      const newDuration = Math.max(30, resizeStartDuration.current + deltaSlots * 30);
+      
+      // Update task duration visually (will be saved on mouse up)
+      const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
+      if (taskEl) {
+        const slots = newDuration / 30;
+        taskEl.style.height = `${slots * SLOT_HEIGHT - 4}px`;
+      }
+    };
+
+    const handleMouseUp = (upEvent) => {
+      const deltaY = upEvent.clientY - resizeStartY.current;
+      const deltaSlots = Math.round(deltaY / SLOT_HEIGHT);
+      const newDuration = Math.max(30, resizeStartDuration.current + deltaSlots * 30);
+      
+      if (newDuration !== resizeStartDuration.current) {
+        onUpdateTask(task.id, { duration: newDuration });
+      }
+      
+      setResizing(null);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
   };
 
   return (
@@ -177,8 +211,8 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             const minutes = currentTime.getMinutes();
             if (hours < 6 || hours > 22) return null;
             const slotIndex = (hours - 6) * 2 + (minutes >= 30 ? 1 : 0);
-            const minuteOffset = (minutes % 30) / 30 * 32;
-            const topPosition = slotIndex * 32 + minuteOffset;
+            const minuteOffset = (minutes % 30) / 30 * SLOT_HEIGHT;
+            const topPosition = slotIndex * SLOT_HEIGHT + minuteOffset;
             const todayIndex = weekDays.findIndex(d => isToday(d));
             
             return (
@@ -204,7 +238,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             );
           })()}
 
-          {TIME_SLOTS.map((time) => {
+          {TIME_SLOTS.map((time, slotIndex) => {
             const isHourMark = time.endsWith(":00");
             const [hours] = time.split(":").map(Number);
 
@@ -212,6 +246,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
               <div
                 key={time}
                 className={`grid grid-cols-[70px_repeat(7,1fr)] ${isHourMark ? "border-t border-border/40" : ""}`}
+                style={{ height: `${SLOT_HEIGHT}px` }}
               >
                 {/* Time Label */}
                 <div className="py-2 px-2 text-right border-r border-border/20">
@@ -235,37 +270,59 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                       onDragOver={(e) => handleDragOver(e, dateStr, time)}
                       onDragLeave={handleDragLeave}
                       onDrop={(e) => handleDrop(e, dateStr, time)}
-                      className={`min-h-[32px] border-b border-r border-border/10 p-0.5
+                      className={`relative border-b border-r border-border/10 p-0.5
                         ${isToday(day) ? "bg-primary/5" : ""}
                         ${isDropHere ? "bg-primary/30 ring-2 ring-inset ring-primary" : ""}
                       `}
+                      style={{ height: `${SLOT_HEIGHT}px` }}
                     >
                       {slotTasks.map((task) => {
                         const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+                        const duration = task.duration || 30;
+                        const slots = duration / 30;
+                        const taskHeight = slots * SLOT_HEIGHT - 4;
 
                         return (
                           <div
                             key={task.id}
-                            draggable
+                            data-task-id={task.id}
+                            draggable={!resizing}
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}
                             onClick={(e) => handleTaskClick(e, task)}
-                            className={`group flex items-center justify-between px-2 py-1 rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors}`}
+                            className={`group absolute left-0.5 right-0.5 rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors} overflow-hidden z-10`}
+                            style={{ height: `${taskHeight}px`, top: '2px' }}
                           >
-                            <span className="truncate">{task.title}</span>
-                            <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 flex-shrink-0 ml-1">
-                              <button
-                                onClick={(e) => handleComplete(e, task.id)}
-                                className="p-0.5 hover:bg-white/30 rounded"
-                              >
-                                <CheckCircle2 className="w-3 h-3" />
-                              </button>
-                              <button
-                                onClick={(e) => handleDelete(e, task.id)}
-                                className="p-0.5 hover:bg-white/30 rounded"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                            <div className="p-1.5 h-full flex flex-col">
+                              <span className="truncate flex-shrink-0">{task.title}</span>
+                              {duration > 30 && (
+                                <span className="text-[10px] opacity-70 mt-0.5">
+                                  {duration} min
+                                </span>
+                              )}
+                              <div className="flex-1" />
+                              <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 flex-shrink-0">
+                                <button
+                                  onClick={(e) => handleComplete(e, task.id)}
+                                  className="p-0.5 hover:bg-white/30 rounded"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                </button>
+                                <button
+                                  onClick={(e) => handleDelete(e, task.id)}
+                                  className="p-0.5 hover:bg-white/30 rounded"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                            </div>
+                            
+                            {/* Resize handle */}
+                            <div
+                              onMouseDown={(e) => handleResizeStart(e, task)}
+                              className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize hover:bg-white/20 flex items-center justify-center"
+                            >
+                              <div className="w-8 h-1 rounded-full bg-white/40" />
                             </div>
                           </div>
                         );
