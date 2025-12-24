@@ -242,6 +242,25 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     document.addEventListener("mouseup", handleMouseUp);
   };
 
+  const handleExportICal = async () => {
+    try {
+      const response = await fetch(`${BACKEND_URL}/api/tasks/export/ical`);
+      if (!response.ok) throw new Error("Export failed");
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "add-daily-tasks.ics";
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Export error:", error);
+    }
+  };
+
   return (
     <div className="space-y-4" data-testid="weekly-calendar">
       {/* Header */}
@@ -272,6 +291,16 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             className="ml-2"
           >
             Today
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleExportICal}
+            className="gap-1.5"
+            title="Export to iCal"
+          >
+            <Download className="w-4 h-4" />
+            Export
           </Button>
         </div>
       </div>
