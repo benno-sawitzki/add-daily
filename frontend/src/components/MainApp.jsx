@@ -227,20 +227,6 @@ function MainApp() {
 
   return (
     <div className="app-container" data-testid="app-container">
-      <Toaster 
-        position="top-right" 
-        richColors 
-        duration={1500}
-        gap={8}
-        toastOptions={{
-          style: {
-            padding: '10px 14px',
-            fontSize: '13px',
-            minWidth: 'auto',
-            maxWidth: '280px',
-          },
-        }}
-      />
       
       {/* Header */}
       <header className="border-b border-border/50 bg-card/50 backdrop-blur-xl sticky top-0 z-30" data-testid="app-header">
