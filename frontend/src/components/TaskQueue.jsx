@@ -44,41 +44,53 @@ export default function TaskQueue({
   onClose 
 }) {
   const [draggedIndex, setDraggedIndex] = useState(null);
-  const [dragOverIndex, setDragOverIndex] = useState(null);
+  const [previewOrder, setPreviewOrder] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
+
+  // Get the display order (preview while dragging, or actual order)
+  const displayTasks = previewOrder || tasks;
 
   const handleDragStart = (e, index) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = "move";
+    // Set a transparent drag image
+    const img = new Image();
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    e.dataTransfer.setDragImage(img, 0, 0);
   };
 
   const handleDragOver = (e, index) => {
     e.preventDefault();
-    if (draggedIndex !== index) {
-      setDragOverIndex(index);
-    }
+    if (draggedIndex === null || draggedIndex === index) return;
+    
+    // Create preview of new order
+    const newOrder = [...tasks];
+    const [draggedTask] = newOrder.splice(draggedIndex, 1);
+    newOrder.splice(index, 0, draggedTask);
+    setPreviewOrder(newOrder);
   };
 
   const handleDragLeave = () => {
-    setDragOverIndex(null);
+    // Don't clear preview on leave - only on drop or end
   };
 
   const handleDrop = (e, dropIndex) => {
     e.preventDefault();
-    if (draggedIndex !== null && draggedIndex !== dropIndex) {
-      const newTasks = [...tasks];
-      const [draggedTask] = newTasks.splice(draggedIndex, 1);
-      newTasks.splice(dropIndex, 0, draggedTask);
-      onReorder(newTasks);
+    if (previewOrder) {
+      onReorder(previewOrder);
     }
     setDraggedIndex(null);
-    setDragOverIndex(null);
+    setPreviewOrder(null);
   };
 
   const handleDragEnd = () => {
+    // If dropped outside, reset
+    if (previewOrder) {
+      onReorder(previewOrder);
+    }
     setDraggedIndex(null);
-    setDragOverIndex(null);
+    setPreviewOrder(null);
   };
 
   const handleDurationChange = (taskId, duration) => {
