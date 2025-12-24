@@ -8,12 +8,12 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Audio Visualizer Component - Smooth pulsing rings
+// Audio Visualizer Component - VU meter style bars
 function AudioVisualizer({ stream, isRecording }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const analyserRef = useRef(null);
-  const smoothedValueRef = useRef(0);
+  const prevLevelsRef = useRef([]);
 
   useEffect(() => {
     if (!stream || !isRecording) {
@@ -27,13 +27,17 @@ function AudioVisualizer({ stream, isRecording }) {
     const analyser = audioContext.createAnalyser();
     const source = audioContext.createMediaStreamSource(stream);
     
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.85;
+    analyser.fftSize = 64;
+    analyser.smoothingTimeConstant = 0.8;
     source.connect(analyser);
     analyserRef.current = analyser;
 
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
+    
+    // Initialize previous levels for smoothing
+    const numBars = 24;
+    prevLevelsRef.current = new Array(numBars).fill(0);
 
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -41,63 +45,69 @@ function AudioVisualizer({ stream, isRecording }) {
     const ctx = canvas.getContext("2d");
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    const baseRadius = 72;
+    const innerRadius = 74;
 
     const draw = () => {
       animationRef.current = requestAnimationFrame(draw);
-      analyser.getByteFrequencyData(dataArray);
+      analyser.getByteTimeDomainData(dataArray);
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Calculate average volume with smoothing
-      const average = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
-      const targetValue = average / 255;
-      
-      // Smooth the value for fluid animation
-      smoothedValueRef.current += (targetValue - smoothedValueRef.current) * 0.15;
-      const level = smoothedValueRef.current;
+      // Calculate RMS volume
+      let sum = 0;
+      for (let i = 0; i < bufferLength; i++) {
+        const val = (dataArray[i] - 128) / 128;
+        sum += val * val;
+      }
+      const rms = Math.sqrt(sum / bufferLength);
+      const volume = Math.min(1, rms * 3);
 
-      // Draw 3 concentric pulsing rings
-      const rings = [
-        { offset: 12, baseWidth: 3, maxExpand: 8, opacity: 0.8 },
-        { offset: 22, baseWidth: 2.5, maxExpand: 12, opacity: 0.5 },
-        { offset: 34, baseWidth: 2, maxExpand: 16, opacity: 0.3 },
-      ];
+      // Draw evenly spaced bars around the circle
+      const barWidth = 3;
+      const maxBarHeight = 20;
+      const gapAngle = (Math.PI * 2) / numBars;
 
-      rings.forEach((ring, i) => {
-        const expansion = level * ring.maxExpand;
-        const radius = baseRadius + ring.offset + expansion;
-        const alpha = ring.opacity * (0.4 + level * 0.6);
+      for (let i = 0; i < numBars; i++) {
+        const angle = i * gapAngle - Math.PI / 2;
         
-        // Create gradient for each ring
-        const gradient = ctx.createRadialGradient(
-          centerX, centerY, radius - ring.baseWidth,
-          centerX, centerY, radius + ring.baseWidth
-        );
-        gradient.addColorStop(0, `rgba(244, 63, 94, 0)`);
-        gradient.addColorStop(0.5, `rgba(244, 63, 94, ${alpha})`);
-        gradient.addColorStop(1, `rgba(244, 63, 94, 0)`);
+        // Create variation based on position and volume
+        const variation = Math.sin(i * 0.5 + Date.now() * 0.003) * 0.3 + 0.7;
+        const targetHeight = volume * maxBarHeight * variation;
+        
+        // Smooth the bar height
+        prevLevelsRef.current[i] += (targetHeight - prevLevelsRef.current[i]) * 0.3;
+        const barHeight = Math.max(4, prevLevelsRef.current[i]);
+        
+        const x1 = centerX + Math.cos(angle) * (innerRadius + 4);
+        const y1 = centerY + Math.sin(angle) * (innerRadius + 4);
+        const x2 = centerX + Math.cos(angle) * (innerRadius + 4 + barHeight);
+        const y2 = centerY + Math.sin(angle) * (innerRadius + 4 + barHeight);
+
+        // Color based on volume level
+        const intensity = barHeight / maxBarHeight;
+        const alpha = 0.5 + intensity * 0.5;
         
         ctx.beginPath();
-        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
         ctx.strokeStyle = `rgba(244, 63, 94, ${alpha})`;
-        ctx.lineWidth = ring.baseWidth + level * 2;
+        ctx.lineWidth = barWidth;
+        ctx.lineCap = "round";
         ctx.stroke();
-      });
+      }
 
-      // Soft outer glow that pulses with audio
-      const glowRadius = baseRadius + 50 + level * 25;
-      const glowGradient = ctx.createRadialGradient(
-        centerX, centerY, baseRadius,
-        centerX, centerY, glowRadius
+      // Soft glow behind bars
+      const gradient = ctx.createRadialGradient(
+        centerX, centerY, innerRadius,
+        centerX, centerY, innerRadius + 30 + volume * 15
       );
-      glowGradient.addColorStop(0, "rgba(244, 63, 94, 0)");
-      glowGradient.addColorStop(0.4, `rgba(244, 63, 94, ${level * 0.12})`);
-      glowGradient.addColorStop(1, "rgba(244, 63, 94, 0)");
+      gradient.addColorStop(0, "rgba(244, 63, 94, 0)");
+      gradient.addColorStop(0.5, `rgba(244, 63, 94, ${volume * 0.15})`);
+      gradient.addColorStop(1, "rgba(244, 63, 94, 0)");
       
       ctx.beginPath();
-      ctx.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
-      ctx.fillStyle = glowGradient;
+      ctx.arc(centerX, centerY, innerRadius + 30 + volume * 15, 0, Math.PI * 2);
+      ctx.fillStyle = gradient;
       ctx.fill();
     };
 
