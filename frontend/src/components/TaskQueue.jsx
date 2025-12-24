@@ -128,6 +128,7 @@ export default function TaskQueue({
 
   // Calculate transform for each item
   const getTransform = (index) => {
+    if (isReordering) return ""; // No transforms during reorder
     if (draggedIndex === null || overIndex === null) return "";
     if (index === draggedIndex) return "";
     
