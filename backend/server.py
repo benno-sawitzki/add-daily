@@ -797,7 +797,7 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
                     values_list.append(
                         f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
                         f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
-                        f"${param_num+8}, ${param_num+9}, ${param_num+10})"
+                        f"${param_num+8}, ${param_num+9})"
                     )
                     params.extend([
                         task_id,
@@ -887,13 +887,25 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
                     
                     created_at = datetime.now(timezone.utc)
                     
+                    # Convert date string to date object for asyncpg
+                    if isinstance(date, str):
+                        try:
+                            date_obj = datetime.strptime(date, "%Y-%m-%d").date()
+                        except ValueError:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Invalid date format: {date}. Expected YYYY-MM-DD"
+                            )
+                    else:
+                        date_obj = date
+                    
                     try:
                         await conn.execute(
                             """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
                                scheduled_date, scheduled_time, duration, status, created_at)
                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
                             task_id, user["id"], title, description, priority, urgency, importance,
-                            date, scheduled_time, duration, "scheduled", created_at
+                            date_obj, scheduled_time, duration, "scheduled", created_at
                         )
                         
                         created_tasks.append({
@@ -903,7 +915,7 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
                             "priority": priority,
                             "urgency": urgency,
                             "importance": importance,
-                            "scheduled_date": date,
+                            "scheduled_date": date_obj.strftime("%Y-%m-%d"),  # Convert back to string for response
                             "scheduled_time": scheduled_time,
                             "duration": duration,
                             "status": "scheduled"

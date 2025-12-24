@@ -186,6 +186,8 @@ function MainApp() {
   // Push queued tasks to calendar
   const pushToCalendar = async () => {
     const taskCount = queuedTasks.length;
+    // Save tasks before clearing (needed for error recovery)
+    const tasksToPush = [...queuedTasks];
     
     // Optimistic update: add tasks to UI immediately
     const optimisticTasks = queuedTasks.map(task => ({
@@ -201,7 +203,7 @@ function MainApp() {
     
     try {
       const response = await axios.post(`${API}/tasks/push-to-calendar`, {
-        tasks: queuedTasks,
+        tasks: tasksToPush,
       });
       
       // Replace optimistic tasks with server response (more accurate, includes scheduling)
@@ -225,7 +227,7 @@ function MainApp() {
       const errorMessage = error.response?.data?.detail || error.message || "Failed to push tasks to calendar";
       toast.error(errorMessage);
       // Restore queue on error
-      setQueuedTasks(queuedTasks);
+      setQueuedTasks(tasksToPush);
       setShowTaskQueue(true);
     }
   };
@@ -233,6 +235,8 @@ function MainApp() {
   // Push queued tasks to inbox
   const pushToInbox = async () => {
     const taskCount = queuedTasks.length;
+    // Save tasks before clearing (needed for error recovery)
+    const tasksToPush = [...queuedTasks];
     
     // Optimistic update: add tasks to UI immediately
     const optimisticTasks = queuedTasks.map(task => ({
@@ -248,7 +252,7 @@ function MainApp() {
     
     try {
       const response = await axios.post(`${API}/tasks/push-to-inbox`, {
-        tasks: queuedTasks,
+        tasks: tasksToPush,
       });
       
       // Replace optimistic tasks with server response (more accurate)
@@ -269,9 +273,10 @@ function MainApp() {
         prevTasks.filter(t => !optimisticTasks.some(ot => ot.id === t.id))
       );
       console.error("Error pushing to inbox:", error);
-      toast.error("Failed to push tasks to inbox");
+      const errorMessage = error.response?.data?.detail || error.message || "Failed to push tasks to inbox";
+      toast.error(errorMessage);
       // Restore queue on error
-      setQueuedTasks(queuedTasks);
+      setQueuedTasks(tasksToPush);
       setShowTaskQueue(true);
     }
   };

@@ -159,8 +159,18 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
   return (
     <canvas
       ref={canvasRef}
-      style={{ width: size, height: size }}
-      className="absolute inset-0 pointer-events-none"
+      style={{ 
+        width: size, 
+        height: size,
+        // Center the canvas but allow it to overflow the container
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        transform: 'translate(-50%, -50%)',
+        // Ensure no clipping
+        overflow: 'visible'
+      }}
+      className="pointer-events-none"
     />
   );
 }
@@ -531,12 +541,14 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         ) : (
           <>
             {/* VU Meter + Record Button Container */}
-            <div className="relative mb-8 flex items-center justify-center" style={{ width: 200, height: 200 }}>
+            {/* Increased size and overflow visible to prevent clipping of expanding rings */}
+            {/* Container is 450px to accommodate max ring expansion (glow can reach ~470px diameter) */}
+            <div className="relative mb-8 flex items-center justify-center" style={{ width: 450, height: 450, overflow: 'visible' }}>
               {/* VU Meter Ring */}
               <VUMeterRing 
                 level={audioLevel} 
                 isRecording={isRecording} 
-                size={200}
+                size={450}
               />
 
               {/* Record Button */}
@@ -545,15 +557,11 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                 disabled={isLoading || isTranscribing}
                 className={`relative w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
                   isRecording
-                    ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)] ring-4 ring-rose-500/30"
+                    ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)]"
                     : isTranscribing
                     ? "bg-card border-2 border-primary/50"
                     : "bg-card border-2 border-border/50 hover:border-primary/50 hover:bg-card/80"
                 }`}
-                style={{
-                  // Ensure the button background fully covers the content
-                  boxShadow: isRecording ? '0 0 40px rgba(244,63,94,0.4), inset 0 0 20px rgba(255,255,255,0.1)' : undefined
-                }}
                 whileHover={!isRecording && !isTranscribing ? { scale: 1.03 } : {}}
                 whileTap={{ scale: 0.97 }}
                 data-testid="voice-orb"
@@ -567,9 +575,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                   </>
                 ) : isRecording ? (
                   <>
-                    <div className="w-6 h-6 bg-white rounded-sm flex items-center justify-center">
-                      <Square className="w-4 h-4 text-rose-500 fill-rose-500" />
-                    </div>
+                    <Square className="w-6 h-6 text-white fill-white" />
                     <span className="text-white text-sm mt-1.5 font-mono">{formatTime(recordingTime)}</span>
                   </>
                 ) : (
