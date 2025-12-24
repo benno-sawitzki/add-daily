@@ -112,6 +112,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
               id="title"
               value={formData.title}
               onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              onKeyDown={handleKeyDown}
               placeholder="Enter task name"
               data-testid="task-title-input"
             />
