@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { CalendarIcon, Trash2 } from "lucide-react";
+import { CalendarIcon, Trash2, Inbox } from "lucide-react";
 import { format, parseISO } from "date-fns";
 
 const PRIORITY_OPTIONS = [
