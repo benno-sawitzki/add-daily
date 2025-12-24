@@ -343,11 +343,6 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                               </button>
                             </div>
                           </div>
-                          {duration > 30 && (
-                            <span className="text-xs opacity-70 mt-1">
-                              {duration} min
-                            </span>
-                          )}
                         </div>
                         
                         {/* Resize handle */}
