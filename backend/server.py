@@ -555,7 +555,7 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
 
 # Push tasks to calendar
 @api_router.post("/tasks/push-to-calendar")
-async def push_to_calendar(request: PushToCalendarRequest):
+async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(get_current_user)):
     """Save tasks and schedule them on calendar"""
     try:
         now = datetime.now(timezone.utc)
@@ -589,6 +589,7 @@ async def push_to_calendar(request: PushToCalendarRequest):
                 
                 task = Task(
                     id=task_data.get("id", str(uuid.uuid4())),
+                    user_id=user["id"],
                     title=task_data.get("title", "Untitled Task"),
                     description=task_data.get("description", ""),
                     urgency=task_data.get("urgency", 2),
