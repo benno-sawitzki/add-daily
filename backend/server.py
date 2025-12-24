@@ -977,51 +977,11 @@ async def sync_single_task(task_id: str):
 # Include the router in the main app
 app.include_router(api_router)
 
-# Add root-level Google callback (without /api prefix) for flexibility
+# Google Calendar callback route - DISABLED
 @app.get("/gcal")
-async def google_callback_root(code: str = Query(...)):
-    """Handle Google OAuth callback at root level"""
-    try:
-        # Exchange code for tokens
-        token_resp = requests.post('https://oauth2.googleapis.com/token', data={
-            'code': code,
-            'client_id': GOOGLE_CLIENT_ID,
-            'client_secret': GOOGLE_CLIENT_SECRET,
-            'redirect_uri': f"{FRONTEND_URL}/gcal",
-            'grant_type': 'authorization_code'
-        }).json()
-        
-        if 'error' in token_resp:
-            logger.error(f"Token error: {token_resp}")
-            return RedirectResponse(f"{FRONTEND_URL}?google_error={token_resp.get('error_description', 'Auth failed')}")
-        
-        # Get user info
-        user_info = requests.get(
-            'https://www.googleapis.com/oauth2/v2/userinfo',
-            headers={'Authorization': f'Bearer {token_resp["access_token"]}'}
-        ).json()
-        
-        email = user_info.get('email', 'unknown')
-        
-        # Save tokens to database
-        await db.google_auth.update_one(
-            {"id": "google_connection"},
-            {"$set": {
-                "email": email,
-                "access_token": token_resp.get('access_token'),
-                "refresh_token": token_resp.get('refresh_token'),
-                "expires_at": datetime.now(timezone.utc) + timedelta(seconds=token_resp.get('expires_in', 3600)),
-                "connected_at": datetime.now(timezone.utc).isoformat()
-            }},
-            upsert=True
-        )
-        
-        logger.info(f"Google Calendar connected for {email}")
-        return RedirectResponse(f"{FRONTEND_URL}?google_connected=true&email={email}")
-        
-    except Exception as e:
-        logger.error(f"Google callback error: {str(e)}")
-        return RedirectResponse(f"{FRONTEND_URL}?google_error={str(e)}")
+async def google_callback_root(code: str = Query(None)):
+    """Handle Google OAuth callback - DISABLED"""
+    return RedirectResponse(f"{FRONTEND_URL}?google_error=Google Calendar sync is currently disabled")
 
 app.add_middleware(
     CORSMiddleware,
