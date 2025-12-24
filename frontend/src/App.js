@@ -376,6 +376,7 @@ function App() {
           onUpdateTask={updateQueuedTask}
           onDeleteTask={deleteQueuedTask}
           onPushToCalendar={pushToCalendar}
+          onPushToInbox={pushToInbox}
           onClose={cancelTaskQueue}
         />
       )}
