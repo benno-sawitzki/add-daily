@@ -266,15 +266,35 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
         </div>
 
         <DialogFooter className="flex justify-between sm:justify-between">
-          <Button
-            variant="destructive"
-            onClick={handleDelete}
-            className="gap-2"
-            data-testid="delete-task-btn"
-          >
-            <Trash2 className="w-4 h-4" />
-            Delete
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              className="gap-2"
+              data-testid="delete-task-btn"
+            >
+              <Trash2 className="w-4 h-4" />
+              Delete
+            </Button>
+            {task?.status === "scheduled" && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  onSave(task.id, { 
+                    status: "inbox", 
+                    scheduled_date: null, 
+                    scheduled_time: null 
+                  });
+                  onOpenChange(false);
+                }}
+                className="gap-2"
+                data-testid="move-to-inbox-btn"
+              >
+                <Inbox className="w-4 h-4" />
+                To Inbox
+              </Button>
+            )}
+          </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
