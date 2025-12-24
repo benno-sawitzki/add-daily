@@ -140,9 +140,52 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         <X className="w-6 h-6" />
       </Button>
 
-      {/* Content */}
+      /* Content */}
       <div className="relative z-10 flex flex-col items-center max-w-2xl w-full px-6">
-        {/* Voice Orb */}
+        {/* Toggle between voice and text */}
+        {!isLoading && (
+          <div className="flex gap-2 mb-8">
+            <Button
+              variant={!useTextInput ? "default" : "outline"}
+              size="sm"
+              onClick={() => setUseTextInput(false)}
+              className="gap-2"
+              data-testid="voice-mode-btn"
+            >
+              <Mic className="w-4 h-4" />
+              Voice
+            </Button>
+            <Button
+              variant={useTextInput ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                setUseTextInput(true);
+                setIsListening(false);
+                recognitionRef.current?.stop();
+              }}
+              className="gap-2"
+              data-testid="text-mode-btn"
+            >
+              <Keyboard className="w-4 h-4" />
+              Type
+            </Button>
+          </div>
+        )}
+
+        {/* Text Input Mode */}
+        {useTextInput ? (
+          <div className="w-full mb-6">
+            <Textarea
+              value={transcript}
+              onChange={(e) => setTranscript(e.target.value)}
+              placeholder="Type your tasks here... e.g., 'I need to call the dentist tomorrow, it's urgent. Also buy groceries this weekend.'"
+              className="min-h-[180px] bg-card/50 backdrop-blur-xl border-border/30 text-lg resize-none"
+              data-testid="text-input"
+            />
+          </div>
+        ) : (
+          <>
+            {/* Voice Orb */}
         <div className="relative mb-10">
           {/* Outer rings */}
           {isListening && (
