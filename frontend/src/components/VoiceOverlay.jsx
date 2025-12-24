@@ -429,7 +429,12 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       }
     } catch (err) {
       console.error("Whisper error:", err);
-      setError("Transcription failed. You can edit the text manually.");
+      // Check for quota exceeded error (429 status or specific message)
+      if (err.response?.status === 429 || err.response?.data?.detail?.includes("QUOTA_EXCEEDED")) {
+        setError("⚠️ API quota exceeded. Please add credits to your Emergent LLM Key (Profile → Universal Key → Add Balance). You can still type your tasks manually below.");
+      } else {
+        setError("Transcription failed. You can edit the text manually.");
+      }
     } finally {
       setIsTranscribing(false);
     }
