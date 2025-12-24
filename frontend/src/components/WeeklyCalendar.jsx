@@ -122,6 +122,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     dragTaskRef.current = null;
     setDraggingTask(null);
     setDragPosition(null);
+    setCursorPosition(null);
   };
 
   const handleCalendarDragOver = (e) => {
@@ -133,18 +134,26 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     const rect = calendarRef.current.getBoundingClientRect();
     const scrollTop = calendarRef.current.scrollTop;
     
-    // Calculate position relative to calendar
+    // Calculate smooth position relative to calendar (follows cursor)
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top + scrollTop;
     
     // Calculate which day column (skip the time label column which is 70px)
     const columnWidth = (rect.width - 70) / 7;
-    const dayIndex = Math.floor((x - 70) / columnWidth);
+    const dayIndex = Math.max(0, Math.min(6, Math.floor((x - 70) / columnWidth)));
     
-    // Calculate which time slot
-    const slotIndex = Math.floor(y / SLOT_HEIGHT);
+    // Store smooth cursor position (for fluid ghost movement)
+    setCursorPosition({
+      x: Math.max(70, x),
+      y: Math.max(0, y),
+      dayIndex,
+      columnWidth
+    });
     
-    if (dayIndex >= 0 && dayIndex < 7 && slotIndex >= 0 && slotIndex < TIME_SLOTS.length) {
+    // Calculate snapped slot position (for drop target indicator)
+    const slotIndex = Math.max(0, Math.min(TIME_SLOTS.length - 1, Math.floor(y / SLOT_HEIGHT)));
+    
+    if (dayIndex >= 0 && dayIndex < 7) {
       setDragPosition({
         dayIndex,
         slotIndex,
@@ -169,6 +178,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     dragTaskRef.current = null;
     setDraggingTask(null);
     setDragPosition(null);
+    setCursorPosition(null);
   };
 
   const handleComplete = (e, taskId) => {
