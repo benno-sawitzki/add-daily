@@ -303,18 +303,34 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
           onDragOver={handleCalendarDragOver}
           onDrop={handleCalendarDrop}
         >
-          {/* Ghost preview of dragging task */}
+          {/* Subtle snap indicator line - shows where task will land */}
           {draggingTask && dragPosition && (
             <div
-              className="absolute pointer-events-none z-30 opacity-70"
+              className="absolute pointer-events-none z-20"
               style={{
-                left: `calc(70px + ${dragPosition.dayIndex} * ((100% - 70px) / 7) + 4px)`,
-                top: `${dragPosition.slotIndex * SLOT_HEIGHT + 2}px`,
-                width: `calc((100% - 70px) / 7 - 8px)`,
-                height: `${((draggingTask.duration || 30) / 30) * SLOT_HEIGHT - 4}px`,
+                left: `calc(70px + ${dragPosition.dayIndex} * ((100% - 70px) / 7))`,
+                top: `${dragPosition.slotIndex * SLOT_HEIGHT}px`,
+                width: `calc((100% - 70px) / 7)`,
+                height: '2px',
               }}
             >
-              <div className={`h-full rounded ${PRIORITY_COLORS[draggingTask.priority] || PRIORITY_COLORS[2]} p-1.5 text-xs font-medium shadow-lg`}>
+              <div className="h-full bg-primary/60 rounded-full shadow-[0_0_8px_rgba(var(--primary),0.4)]" />
+            </div>
+          )}
+
+          {/* Ghost preview - follows cursor smoothly */}
+          {draggingTask && cursorPosition && (
+            <div
+              className="absolute pointer-events-none z-30 transition-opacity duration-75"
+              style={{
+                left: `calc(70px + ${cursorPosition.dayIndex} * ((100% - 70px) / 7) + 4px)`,
+                top: `${cursorPosition.y - 20}px`,
+                width: `calc((100% - 70px) / 7 - 8px)`,
+                height: `${((draggingTask.duration || 30) / 30) * SLOT_HEIGHT - 4}px`,
+                opacity: 0.85,
+              }}
+            >
+              <div className={`h-full rounded-lg ${PRIORITY_COLORS[draggingTask.priority] || PRIORITY_COLORS[2]} p-1.5 text-xs font-medium shadow-xl border border-white/20`}>
                 <span className="truncate block">{draggingTask.title}</span>
               </div>
             </div>
