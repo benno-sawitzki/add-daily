@@ -155,23 +155,20 @@ export default function TaskQueue({
         {/* Task List */}
         <div className="p-4 max-h-[400px] overflow-y-auto">
           <div className="space-y-2">
-            {tasks.map((task, index) => {
+            {displayTasks.map((task, index) => {
               const priorityColor = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
-              const isDragging = draggedIndex === index;
-              const isDragOver = dragOverIndex === index;
+              const isDragging = draggedIndex !== null && tasks[draggedIndex]?.id === task.id;
 
               return (
                 <div
                   key={task.id}
                   draggable
-                  onDragStart={(e) => handleDragStart(e, index)}
+                  onDragStart={(e) => handleDragStart(e, tasks.findIndex(t => t.id === task.id))}
                   onDragOver={(e) => handleDragOver(e, index)}
-                  onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, index)}
                   onDragEnd={handleDragEnd}
                   className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-grab active:cursor-grabbing
-                    ${isDragging ? "opacity-50 scale-95" : ""}
-                    ${isDragOver ? "border-primary bg-primary/10" : "border-border bg-card/50 hover:bg-card"}
+                    ${isDragging ? "opacity-50 scale-[0.98] border-primary bg-primary/10 shadow-lg" : "border-border bg-card/50 hover:bg-card"}
                   `}
                   data-testid={`queue-task-${task.id}`}
                 >
