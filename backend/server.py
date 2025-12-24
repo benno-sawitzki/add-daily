@@ -47,6 +47,7 @@ class Task(BaseModel):
     importance: int = Field(default=2, ge=1, le=4)
     scheduled_date: Optional[str] = None  # ISO date string
     scheduled_time: Optional[str] = None  # HH:MM format
+    duration: int = Field(default=30)  # Duration in minutes (30, 60, 90, etc.)
     status: str = Field(default="inbox")  # inbox, scheduled, completed
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
