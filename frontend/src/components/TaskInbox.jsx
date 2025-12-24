@@ -41,8 +41,16 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
     });
   };
 
-  const handleCompleteTask = (taskId) => {
+  const handleCompleteTask = (e, taskId) => {
+    e.stopPropagation();
+    e.preventDefault();
     onUpdateTask(taskId, { status: "completed" });
+  };
+
+  const handleDeleteTask = (e, taskId) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onDeleteTask(taskId);
   };
 
   if (tasks.length === 0) {
