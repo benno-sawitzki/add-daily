@@ -10,6 +10,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [interimTranscript, setInterimTranscript] = useState("");
   const [isSupported, setIsSupported] = useState(true);
   const [error, setError] = useState(null);
+  const [useTextInput, setUseTextInput] = useState(false);
   const recognitionRef = useRef(null);
 
   useEffect(() => {
