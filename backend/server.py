@@ -455,25 +455,50 @@ async def google_auth(auth_data: GoogleAuthRequest):
 @api_router.post("/tasks", response_model=Task)
 async def create_task(task_input: TaskCreate, user: dict = Depends(get_current_user)):
     task = Task(**task_input.model_dump(), user_id=user["id"])
-    doc = task.model_dump()
-    await db.tasks.insert_one(doc)
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
+               scheduled_date, scheduled_time, duration, status, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+            task.id, user["id"], task.title, task.description, task.priority, task.urgency, task.importance,
+            task.scheduled_date, task.scheduled_time, task.duration, task.status, datetime.now(timezone.utc)
+        )
     return task
 
 @api_router.get("/tasks", response_model=List[Task])
 async def get_tasks(status: Optional[str] = None, user: dict = Depends(get_current_user)):
-    query = {"user_id": user["id"]}
-    if status:
-        query["status"] = status
-    
-    tasks = await db.tasks.find(query, {"_id": 0}).sort("priority", -1).to_list(1000)
-    return tasks
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        if status:
+            rows = await conn.fetch(
+                """SELECT id, user_id, title, description, priority, urgency, importance, 
+                   scheduled_date::text, scheduled_time, duration, status, created_at::text
+                   FROM tasks WHERE user_id = $1 AND status = $2 ORDER BY priority DESC""",
+                user["id"], status
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT id, user_id, title, description, priority, urgency, importance, 
+                   scheduled_date::text, scheduled_time, duration, status, created_at::text
+                   FROM tasks WHERE user_id = $1 ORDER BY priority DESC""",
+                user["id"]
+            )
+    return [dict(row) for row in rows]
 
 @api_router.get("/tasks/{task_id}", response_model=Task)
 async def get_task(task_id: str, user: dict = Depends(get_current_user)):
-    task = await db.tasks.find_one({"id": task_id, "user_id": user["id"]}, {"_id": 0})
-    if not task:
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """SELECT id, user_id, title, description, priority, urgency, importance, 
+               scheduled_date::text, scheduled_time, duration, status, created_at::text
+               FROM tasks WHERE id = $1 AND user_id = $2""",
+            task_id, user["id"]
+        )
+    if not row:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    return dict(row)
 
 @api_router.patch("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depends(get_current_user)):
@@ -481,17 +506,36 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data provided")
     
-    result = await db.tasks.update_one({"id": task_id, "user_id": user["id"]}, {"$set": update_data})
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Task not found")
-    
-    task = await db.tasks.find_one({"id": task_id}, {"_id": 0})
-    return task
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Build dynamic update query
+        set_clauses = []
+        values = []
+        for i, (key, value) in enumerate(update_data.items(), start=1):
+            set_clauses.append(f"{key} = ${i}")
+            values.append(value)
+        values.extend([task_id, user["id"]])
+        
+        query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE id = ${len(values)-1} AND user_id = ${len(values)}"
+        result = await conn.execute(query, *values)
+        
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        row = await conn.fetchrow(
+            """SELECT id, user_id, title, description, priority, urgency, importance, 
+               scheduled_date::text, scheduled_time, duration, status, created_at::text
+               FROM tasks WHERE id = $1""",
+            task_id
+        )
+    return dict(row)
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
-    result = await db.tasks.delete_one({"id": task_id, "user_id": user["id"]})
-    if result.deleted_count == 0:
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute("DELETE FROM tasks WHERE id = $1 AND user_id = $2", task_id, user["id"])
+    if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted"}
 
