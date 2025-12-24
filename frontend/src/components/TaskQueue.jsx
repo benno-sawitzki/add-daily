@@ -299,7 +299,7 @@ export default function TaskQueue({
         <div className="p-6 border-t border-border bg-card flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="text-sm text-muted-foreground">
-              <span className="font-medium text-foreground">{visualTasks.length} tasks</span>
+              <span className="font-medium text-foreground">{tasks.length} tasks</span>
               <span className="mx-2">·</span>
               <span>Total: {formatDuration(getTotalDuration())}</span>
             </div>
