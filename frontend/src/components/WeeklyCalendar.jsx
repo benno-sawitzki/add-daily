@@ -490,8 +490,9 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
 
                         return (
                           <div
-                            key={task.id}
+                            key={`${task.id}-${task.priority}`}
                             data-task-id={task.id}
+                            data-priority={task.priority}
                             draggable={!resizing}
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}
