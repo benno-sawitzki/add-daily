@@ -168,6 +168,15 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
           );
         })}
       </AnimatePresence>
+
+      {/* Edit Dialog */}
+      <TaskEditDialog
+        task={editingTask}
+        open={!!editingTask}
+        onOpenChange={(open) => !open && setEditingTask(null)}
+        onSave={onUpdateTask}
+        onDelete={onDeleteTask}
+      />
     </div>
   );
 }
