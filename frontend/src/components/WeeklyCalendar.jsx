@@ -170,7 +170,40 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
         </div>
 
         {/* Time Grid */}
-        <div className="max-h-[500px] overflow-y-auto">
+        <div className="max-h-[500px] overflow-y-auto relative">
+          {/* Current time indicator */}
+          {weekDays.some(d => isToday(d)) && (() => {
+            const hours = currentTime.getHours();
+            const minutes = currentTime.getMinutes();
+            if (hours < 6 || hours > 22) return null;
+            const slotIndex = (hours - 6) * 2 + (minutes >= 30 ? 1 : 0);
+            const minuteOffset = (minutes % 30) / 30 * 32;
+            const topPosition = slotIndex * 32 + minuteOffset;
+            const todayIndex = weekDays.findIndex(d => isToday(d));
+            
+            return (
+              <div
+                className="absolute z-20 pointer-events-none"
+                style={{ 
+                  top: `${topPosition}px`,
+                  left: '70px',
+                  right: '0'
+                }}
+              >
+                <div 
+                  className="flex items-center"
+                  style={{
+                    marginLeft: `calc(${todayIndex} * (100% / 7))`,
+                    width: `calc(100% / 7)`
+                  }}
+                >
+                  <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] -ml-1.5"></div>
+                  <div className="flex-1 h-0.5 bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)]"></div>
+                </div>
+              </div>
+            );
+          })()}
+
           {TIME_SLOTS.map((time) => {
             const isHourMark = time.endsWith(":00");
             const [hours] = time.split(":").map(Number);
