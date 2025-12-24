@@ -27,6 +27,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [resizing, setResizing] = useState(null);
   const timeLineRef = useRef(null);
+  const scrollContainerRef = useRef(null);
   const dragTaskRef = useRef(null);
   const resizeStartY = useRef(null);
   const resizeStartDuration = useRef(null);
@@ -41,10 +42,23 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     return () => clearInterval(timer);
   }, []);
 
-  // Scroll to current time on mount
+  // Auto-scroll to current time on mount (with 1 hour buffer)
   useEffect(() => {
-    if (timeLineRef.current && isToday(currentDate)) {
-      timeLineRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (scrollContainerRef.current && isToday(currentDate)) {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMin = now.getMinutes();
+      
+      // Calculate scroll position: current time minus 1 hour buffer
+      const bufferHours = 1;
+      const targetHour = Math.max(6, currentHour - bufferHours);
+      const slotsFromTop = (targetHour - 6) * 2 + Math.floor(currentMin / 30);
+      const scrollPosition = Math.max(0, slotsFromTop * SLOT_HEIGHT);
+      
+      scrollContainerRef.current.scrollTo({
+        top: scrollPosition,
+        behavior: "smooth"
+      });
     }
   }, [currentDate]);
 
