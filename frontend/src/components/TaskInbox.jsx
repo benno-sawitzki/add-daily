@@ -224,10 +224,43 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                       <Button
                         variant="ghost"
+                        size="sm"
+                        className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleScheduleTask(task.id, new Date().toISOString().split("T")[0]);
+                        }}
+                        title="Schedule for Today"
+                      >
+                        <Calendar className="w-3.5 h-3.5 mr-1" />
+                        Today
+                      </Button>
+
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const tomorrow = new Date();
+                          tomorrow.setDate(tomorrow.getDate() + 1);
+                          handleScheduleTask(task.id, tomorrow.toISOString().split("T")[0]);
+                        }}
+                        title="Schedule for Tomorrow"
+                      >
+                        <Clock className="w-3.5 h-3.5 mr-1" />
+                        Tomorrow
+                      </Button>
+
+                      <div className="w-px h-5 bg-border mx-1" />
+
+                      <Button
+                        variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
                         onClick={(e) => handleCompleteTask(e, task.id)}
                         data-testid={`complete-task-${task.id}`}
+                        title="Mark as done"
                       >
                         <CheckCircle2 className="w-4 h-4" />
                       </Button>
@@ -238,41 +271,10 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
                         className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
                         onClick={(e) => handleDeleteTask(e, task.id)}
                         data-testid={`delete-task-${task.id}`}
+                        title="Delete"
                       >
                         <Trash2 className="w-4 h-4" />
                       </Button>
-
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                          <Button variant="ghost" size="icon" className="h-8 w-8" data-testid={`task-menu-${task.id}`}>
-                            <MoreVertical className="w-4 h-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleScheduleTask(task.id, new Date().toISOString().split("T")[0]);
-                            }}
-                            className="gap-2"
-                          >
-                            <Calendar className="w-4 h-4" />
-                            Schedule for Today
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const tomorrow = new Date();
-                              tomorrow.setDate(tomorrow.getDate() + 1);
-                              handleScheduleTask(task.id, tomorrow.toISOString().split("T")[0]);
-                            }}
-                            className="gap-2"
-                          >
-                            <Clock className="w-4 h-4" />
-                            Schedule for Tomorrow
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
                     </div>
                   </div>
                 </Card>
