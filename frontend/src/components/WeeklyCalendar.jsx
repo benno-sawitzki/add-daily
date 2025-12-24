@@ -333,6 +333,9 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                         const duration = task.duration || 30;
                         const slots = duration / 30;
                         const taskHeight = slots * SLOT_HEIGHT - 4;
+                        const { index, total } = getTaskPosition(task, dateStr);
+                        const width = `calc((100% - 4px) / ${total})`;
+                        const left = `calc(2px + (100% - 4px) * ${index} / ${total})`;
 
                         return (
                           <div
@@ -342,8 +345,14 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}
                             onClick={(e) => handleTaskClick(e, task)}
-                            className={`group absolute left-0.5 right-0.5 rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
-                            style={{ height: `${taskHeight}px`, top: '2px', overflow: 'hidden' }}
+                            className={`group absolute rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
+                            style={{ 
+                              height: `${taskHeight}px`, 
+                              top: '2px', 
+                              overflow: 'hidden',
+                              width: width,
+                              left: left
+                            }}
                           >
                             <div className="p-1.5 h-full flex flex-col overflow-hidden">
                               <span className="truncate flex-shrink-0 block">{task.title}</span>
