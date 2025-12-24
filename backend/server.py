@@ -248,46 +248,56 @@ async def push_to_calendar(request: PushToCalendarRequest):
     try:
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
-        tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        # Start scheduling 1 hour from now
-        current_hour = now.hour + 1
-        current_minute = 0
-        current_date = today
+        # Group tasks by date
+        tasks_by_date = {}
+        for task_data in request.tasks:
+            date = task_data.get("scheduled_date") or today
+            if date not in tasks_by_date:
+                tasks_by_date[date] = []
+            tasks_by_date[date].append(task_data)
         
         created_tasks = []
         
-        for task_data in request.tasks:
-            # Calculate time slot
-            if current_hour >= 22:  # After 10 PM, move to tomorrow
-                current_date = tomorrow
+        for date, date_tasks in tasks_by_date.items():
+            # Start scheduling 1 hour from now for today, 9 AM for other days
+            if date == today:
+                current_hour = now.hour + 1
+            else:
                 current_hour = 9
+            current_minute = 0
             
-            scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
-            
-            task = Task(
-                id=task_data.get("id", str(uuid.uuid4())),
-                title=task_data.get("title", "Untitled Task"),
-                description=task_data.get("description", ""),
-                urgency=task_data.get("urgency", 2),
-                importance=task_data.get("importance", 2),
-                priority=task_data.get("priority", 2),
-                duration=task_data.get("duration", 30),
-                scheduled_date=current_date,
-                scheduled_time=scheduled_time,
-                status="scheduled"
-            )
-            
-            doc = task.model_dump()
-            await db.tasks.insert_one(doc)
-            created_tasks.append(task)
-            
-            # Advance time by task duration
-            duration = task_data.get("duration", 30)
-            current_minute += duration
-            while current_minute >= 60:
-                current_minute -= 60
-                current_hour += 1
+            for task_data in date_tasks:
+                # Wrap to next day if past 10 PM
+                if current_hour >= 22:
+                    current_hour = 9
+                    current_minute = 0
+                
+                scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
+                
+                task = Task(
+                    id=task_data.get("id", str(uuid.uuid4())),
+                    title=task_data.get("title", "Untitled Task"),
+                    description=task_data.get("description", ""),
+                    urgency=task_data.get("urgency", 2),
+                    importance=task_data.get("importance", 2),
+                    priority=task_data.get("priority", 2),
+                    duration=task_data.get("duration", 30),
+                    scheduled_date=date,
+                    scheduled_time=scheduled_time,
+                    status="scheduled"
+                )
+                
+                doc = task.model_dump()
+                await db.tasks.insert_one(doc)
+                created_tasks.append(task)
+                
+                # Advance time by task duration
+                duration = task_data.get("duration", 30)
+                current_minute += duration
+                while current_minute >= 60:
+                    current_minute -= 60
+                    current_hour += 1
         
         return {
             "success": True,
