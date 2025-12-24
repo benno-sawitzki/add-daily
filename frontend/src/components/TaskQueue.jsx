@@ -163,11 +163,17 @@ export default function TaskQueue({
         </div>
 
         {/* Task List - Fixed height container */}
-        <div className="p-4 overflow-y-auto flex-1" style={{ minHeight: `${Math.min(visualTasks.length * 68 + 16, 340)}px` }}>
+        <div 
+          className="p-4 overflow-y-auto flex-1" 
+          style={{ minHeight: `${Math.min(tasks.length * ITEM_HEIGHT + 16, 340)}px` }}
+          onDrop={handleDrop}
+          onDragOver={(e) => e.preventDefault()}
+        >
           <div className="relative">
-            {visualTasks.map((task, index) => {
+            {tasks.map((task, index) => {
               const priorityColor = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
               const isDragging = draggedIndex === index;
+              const transform = getTransform(index);
 
               return (
                 <div
@@ -175,13 +181,18 @@ export default function TaskQueue({
                   draggable={editingId !== task.id}
                   onDragStart={(e) => handleDragStart(e, index)}
                   onDragOver={(e) => handleDragOver(e, index)}
+                  onDragLeave={handleDragLeave}
                   onDragEnd={handleDragEnd}
                   className={`flex items-center gap-3 p-3 rounded-xl border mb-2 select-none
                     ${isDragging 
-                      ? "opacity-50 border-primary bg-primary/10 shadow-lg" 
-                      : "border-border bg-card/50 hover:bg-card cursor-grab active:cursor-grabbing"
+                      ? "opacity-40 border-dashed border-primary bg-primary/5 z-0" 
+                      : "border-border bg-card/50 hover:bg-card cursor-grab active:cursor-grabbing z-10"
                     }
                   `}
+                  style={{
+                    transform: transform,
+                    transition: draggedIndex !== null ? "transform 200ms ease" : "none",
+                  }}
                   data-testid={`queue-task-${task.id}`}
                 >
                   {/* Drag Handle */}
