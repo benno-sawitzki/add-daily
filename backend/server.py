@@ -428,15 +428,15 @@ async def google_auth(auth_data: GoogleAuthRequest):
 
 # Task CRUD
 @api_router.post("/tasks", response_model=Task)
-async def create_task(task_input: TaskCreate):
-    task = Task(**task_input.model_dump())
+async def create_task(task_input: TaskCreate, user: dict = Depends(get_current_user)):
+    task = Task(**task_input.model_dump(), user_id=user["id"])
     doc = task.model_dump()
     await db.tasks.insert_one(doc)
     return task
 
 @api_router.get("/tasks", response_model=List[Task])
-async def get_tasks(status: Optional[str] = None):
-    query = {}
+async def get_tasks(status: Optional[str] = None, user: dict = Depends(get_current_user)):
+    query = {"user_id": user["id"]}
     if status:
         query["status"] = status
     
@@ -444,19 +444,19 @@ async def get_tasks(status: Optional[str] = None):
     return tasks
 
 @api_router.get("/tasks/{task_id}", response_model=Task)
-async def get_task(task_id: str):
-    task = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+async def get_task(task_id: str, user: dict = Depends(get_current_user)):
+    task = await db.tasks.find_one({"id": task_id, "user_id": user["id"]}, {"_id": 0})
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
 @api_router.patch("/tasks/{task_id}", response_model=Task)
-async def update_task(task_id: str, task_update: TaskUpdate):
+async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depends(get_current_user)):
     update_data = {k: v for k, v in task_update.model_dump().items() if v is not None}
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data provided")
     
-    result = await db.tasks.update_one({"id": task_id}, {"$set": update_data})
+    result = await db.tasks.update_one({"id": task_id, "user_id": user["id"]}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
     
@@ -464,8 +464,8 @@ async def update_task(task_id: str, task_update: TaskUpdate):
     return task
 
 @api_router.delete("/tasks/{task_id}")
-async def delete_task(task_id: str):
-    result = await db.tasks.delete_one({"id": task_id})
+async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
+    result = await db.tasks.delete_one({"id": task_id, "user_id": user["id"]})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted"}
