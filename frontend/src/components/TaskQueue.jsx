@@ -306,9 +306,13 @@ export default function TaskQueue({
               <Button variant="outline" onClick={onClose}>
                 Cancel
               </Button>
+              <Button variant="secondary" onClick={onPushToInbox} className="gap-2">
+                <Inbox className="w-4 h-4" />
+                To Inbox
+              </Button>
               <Button onClick={onPushToCalendar} className="gap-2">
                 <CalendarIcon className="w-4 h-4" />
-                Push to Calendar
+                To Calendar
               </Button>
             </div>
           </div>
