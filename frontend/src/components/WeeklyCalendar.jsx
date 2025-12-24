@@ -21,6 +21,7 @@ for (let hour = 6; hour <= 22; hour++) {
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dropTarget, setDropTarget] = useState(null);
+  const [editingTask, setEditingTask] = useState(null);
   const dragTaskRef = useRef(null);
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
