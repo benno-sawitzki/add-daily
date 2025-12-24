@@ -8,11 +8,12 @@ import axios from "axios";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Audio Visualizer Component
+// Audio Visualizer Component - Smooth pulsing rings
 function AudioVisualizer({ stream, isRecording }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const analyserRef = useRef(null);
+  const smoothedValueRef = useRef(0);
 
   useEffect(() => {
     if (!stream || !isRecording) {
@@ -27,7 +28,7 @@ function AudioVisualizer({ stream, isRecording }) {
     const source = audioContext.createMediaStreamSource(stream);
     
     analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.7;
+    analyser.smoothingTimeConstant = 0.85;
     source.connect(analyser);
     analyserRef.current = analyser;
 
@@ -40,7 +41,7 @@ function AudioVisualizer({ stream, isRecording }) {
     const ctx = canvas.getContext("2d");
     const centerX = canvas.width / 2;
     const centerY = canvas.height / 2;
-    const radius = 72; // Radius of the recording button
+    const baseRadius = 72;
 
     const draw = () => {
       animationRef.current = requestAnimationFrame(draw);
@@ -48,54 +49,55 @@ function AudioVisualizer({ stream, isRecording }) {
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // Calculate average volume
+      // Calculate average volume with smoothing
       const average = dataArray.reduce((a, b) => a + b, 0) / bufferLength;
-      const normalizedAvg = average / 255;
+      const targetValue = average / 255;
+      
+      // Smooth the value for fluid animation
+      smoothedValueRef.current += (targetValue - smoothedValueRef.current) * 0.15;
+      const level = smoothedValueRef.current;
 
-      // Draw multiple rings based on audio level
-      const numBars = 32;
-      const barWidth = 4;
+      // Draw 3 concentric pulsing rings
+      const rings = [
+        { offset: 12, baseWidth: 3, maxExpand: 8, opacity: 0.8 },
+        { offset: 22, baseWidth: 2.5, maxExpand: 12, opacity: 0.5 },
+        { offset: 34, baseWidth: 2, maxExpand: 16, opacity: 0.3 },
+      ];
 
-      for (let i = 0; i < numBars; i++) {
-        const angle = (i / numBars) * Math.PI * 2 - Math.PI / 2;
+      rings.forEach((ring, i) => {
+        const expansion = level * ring.maxExpand;
+        const radius = baseRadius + ring.offset + expansion;
+        const alpha = ring.opacity * (0.4 + level * 0.6);
         
-        // Get frequency data for this bar
-        const freqIndex = Math.floor((i / numBars) * bufferLength);
-        const freqValue = dataArray[freqIndex] / 255;
-        
-        // Bar height based on frequency
-        const barHeight = 10 + freqValue * 35;
-        
-        const x1 = centerX + Math.cos(angle) * (radius + 8);
-        const y1 = centerY + Math.sin(angle) * (radius + 8);
-        const x2 = centerX + Math.cos(angle) * (radius + 8 + barHeight);
-        const y2 = centerY + Math.sin(angle) * (radius + 8 + barHeight);
-
-        // Gradient from rose to orange based on intensity
-        const intensity = freqValue;
-        const r = 244;
-        const g = Math.floor(63 + intensity * 100);
-        const b = Math.floor(94 - intensity * 50);
+        // Create gradient for each ring
+        const gradient = ctx.createRadialGradient(
+          centerX, centerY, radius - ring.baseWidth,
+          centerX, centerY, radius + ring.baseWidth
+        );
+        gradient.addColorStop(0, `rgba(244, 63, 94, 0)`);
+        gradient.addColorStop(0.5, `rgba(244, 63, 94, ${alpha})`);
+        gradient.addColorStop(1, `rgba(244, 63, 94, 0)`);
         
         ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${0.6 + intensity * 0.4})`;
-        ctx.lineWidth = barWidth;
-        ctx.lineCap = "round";
+        ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(244, 63, 94, ${alpha})`;
+        ctx.lineWidth = ring.baseWidth + level * 2;
         ctx.stroke();
-      }
+      });
 
-      // Outer glow ring
-      const glowRadius = radius + 50 + normalizedAvg * 20;
-      const gradient = ctx.createRadialGradient(centerX, centerY, radius, centerX, centerY, glowRadius);
-      gradient.addColorStop(0, "rgba(244, 63, 94, 0)");
-      gradient.addColorStop(0.5, `rgba(244, 63, 94, ${normalizedAvg * 0.15})`);
-      gradient.addColorStop(1, "rgba(244, 63, 94, 0)");
+      // Soft outer glow that pulses with audio
+      const glowRadius = baseRadius + 50 + level * 25;
+      const glowGradient = ctx.createRadialGradient(
+        centerX, centerY, baseRadius,
+        centerX, centerY, glowRadius
+      );
+      glowGradient.addColorStop(0, "rgba(244, 63, 94, 0)");
+      glowGradient.addColorStop(0.4, `rgba(244, 63, 94, ${level * 0.12})`);
+      glowGradient.addColorStop(1, "rgba(244, 63, 94, 0)");
       
       ctx.beginPath();
       ctx.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
-      ctx.fillStyle = gradient;
+      ctx.fillStyle = glowGradient;
       ctx.fill();
     };
 
