@@ -3,6 +3,11 @@ import axios from 'axios';
 
 const API = process.env.REACT_APP_BACKEND_URL;
 
+// Validate API URL is set
+if (!API) {
+  console.error('REACT_APP_BACKEND_URL is not set! Authentication will not work.');
+}
+
 const AuthContext = createContext(null);
 
 export const useAuth = () => {
@@ -60,28 +65,50 @@ export const AuthProvider = ({ children }) => {
   }, [verifyToken]);
 
   const signup = async (email, password, name) => {
-    const response = await axios.post(`${API}/api/auth/signup`, {
-      email,
-      password,
-      name
-    });
-    const { token: newToken, user: userData } = response.data;
-    localStorage.setItem('auth_token', newToken);
-    setToken(newToken);
-    setUser(userData);
-    return userData;
+    if (!API) {
+      throw new Error('Backend URL is not configured. Please set REACT_APP_BACKEND_URL environment variable.');
+    }
+    try {
+      const response = await axios.post(`${API}/api/auth/signup`, {
+        email,
+        password,
+        name
+      });
+      const { token: newToken, user: userData } = response.data;
+      localStorage.setItem('auth_token', newToken);
+      setToken(newToken);
+      setUser(userData);
+      return userData;
+    } catch (error) {
+      console.error('Signup error:', error);
+      if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
+        throw new Error('Cannot connect to backend server. Please check that the backend is running and REACT_APP_BACKEND_URL is set correctly.');
+      }
+      throw error;
+    }
   };
 
   const login = async (email, password) => {
-    const response = await axios.post(`${API}/api/auth/login`, {
-      email,
-      password
-    });
-    const { token: newToken, user: userData } = response.data;
-    localStorage.setItem('auth_token', newToken);
-    setToken(newToken);
-    setUser(userData);
-    return userData;
+    if (!API) {
+      throw new Error('Backend URL is not configured. Please set REACT_APP_BACKEND_URL environment variable.');
+    }
+    try {
+      const response = await axios.post(`${API}/api/auth/login`, {
+        email,
+        password
+      });
+      const { token: newToken, user: userData } = response.data;
+      localStorage.setItem('auth_token', newToken);
+      setToken(newToken);
+      setUser(userData);
+      return userData;
+    } catch (error) {
+      console.error('Login error:', error);
+      if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
+        throw new Error('Cannot connect to backend server. Please check that the backend is running and REACT_APP_BACKEND_URL is set correctly.');
+      }
+      throw error;
+    }
   };
 
   const googleLogin = async (code, redirectUri) => {

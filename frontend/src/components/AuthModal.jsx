@@ -60,7 +60,16 @@ const AuthModal = ({ open, mode, onClose, onSwitchMode }) => {
       navigate('/app');
     } catch (err) {
       console.error('Auth error:', err);
-      setError(err.response?.data?.detail || 'Authentication failed. Please try again.');
+      // Show more helpful error messages
+      let errorMessage = 'Authentication failed. Please try again.';
+      if (err.message) {
+        errorMessage = err.message;
+      } else if (err.response?.data?.detail) {
+        errorMessage = err.response.data.detail;
+      } else if (err.code === 'ERR_NETWORK' || err.message?.includes('Network Error')) {
+        errorMessage = 'Cannot connect to backend server. Please check your connection and backend URL configuration.';
+      }
+      setError(errorMessage);
     } finally {
       setLoading(false);
     }
