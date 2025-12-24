@@ -85,6 +85,10 @@ export default function TaskQueue({
     onUpdateTask(taskId, { duration: parseInt(duration) });
   };
 
+  const handleDateChange = (taskId, date) => {
+    onUpdateTask(taskId, { scheduled_date: date ? format(date, "yyyy-MM-dd") : null });
+  };
+
   const startEditing = (task) => {
     setEditingId(task.id);
     setEditTitle(task.title);
