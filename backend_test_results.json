@@ -1,0 +1,123 @@
+{
+  "summary": {
+    "tests_run": 19,
+    "tests_passed": 19,
+    "success_rate": 100.0
+  },
+  "results": [
+    {
+      "test": "Root Endpoint",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.757544"
+    },
+    {
+      "test": "Health Check",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.792290"
+    },
+    {
+      "test": "Get All Tasks",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.826656"
+    },
+    {
+      "test": "Create Task",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.878399"
+    },
+    {
+      "test": "Get Specific Task",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.914630"
+    },
+    {
+      "test": "Update Task",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.947696"
+    },
+    {
+      "test": "Get Scheduled Tasks",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:48.982123"
+    },
+    {
+      "test": "Delete Task",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:49.027029"
+    },
+    {
+      "test": "Verify Task Deleted",
+      "success": true,
+      "details": "Status: 404, Expected: 404",
+      "timestamp": "2025-12-24T09:55:49.059566"
+    },
+    {
+      "test": "Process Voice Input",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:51.141988"
+    },
+    {
+      "test": "Verify Voice Tasks Created",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:51.178810"
+    },
+    {
+      "test": "Voice Tasks Found in Database",
+      "success": true,
+      "details": "Found 2 tasks",
+      "timestamp": "2025-12-24T09:55:51.179340"
+    },
+    {
+      "test": "Get Settings",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:51.210943"
+    },
+    {
+      "test": "Update Settings",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:51.246915"
+    },
+    {
+      "test": "Verify Settings Updated",
+      "success": true,
+      "details": "Status: 200, Expected: 200",
+      "timestamp": "2025-12-24T09:55:51.281621"
+    },
+    {
+      "test": "Settings Provider Updated",
+      "success": true,
+      "details": "",
+      "timestamp": "2025-12-24T09:55:51.282119"
+    },
+    {
+      "test": "Invalid Task ID",
+      "success": true,
+      "details": "Status: 404, Expected: 404",
+      "timestamp": "2025-12-24T09:55:51.313601"
+    },
+    {
+      "test": "Invalid Endpoint",
+      "success": true,
+      "details": "Status: 404, Expected: 404",
+      "timestamp": "2025-12-24T09:55:51.342882"
+    },
+    {
+      "test": "Empty Task Creation",
+      "success": true,
+      "details": "Status: 422, Expected: 422",
+      "timestamp": "2025-12-24T09:55:51.372451"
+    }
+  ]
+}
