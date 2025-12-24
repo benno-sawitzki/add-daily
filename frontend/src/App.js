@@ -208,7 +208,7 @@ function App() {
               <Brain className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-xl font-semibold">TaskFlow</h1>
+              <h1 className="text-xl font-semibold">ADD Daily</h1>
               <p className="text-sm text-muted-foreground">AI-powered task inbox</p>
             </div>
           </div>
