@@ -267,6 +267,22 @@ function App() {
                   </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
+                <DropdownMenuLabel>Anthropic</DropdownMenuLabel>
+                {AI_MODELS.anthropic.map((model) => (
+                  <DropdownMenuItem
+                    key={model.id}
+                    onClick={() => updateSettings("anthropic", model.id)}
+                    className="gap-2"
+                    data-testid={`model-option-${model.id}`}
+                  >
+                    <Brain className="w-4 h-4 text-[#D97706]" />
+                    {model.name}
+                    {settings.ai_model === model.id && (
+                      <CheckCircle2 className="w-4 h-4 ml-auto text-primary" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
                 <DropdownMenuLabel>Google</DropdownMenuLabel>
                 {AI_MODELS.gemini.map((model) => (
                   <DropdownMenuItem
