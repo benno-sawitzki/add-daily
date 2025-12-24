@@ -462,23 +462,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
-  // Demo mode: start "recording" simulation
-  const startDemoRecording = () => {
-    setIsRecording(true);
-    setRecordingTime(0);
-    timerRef.current = setInterval(() => {
-      setRecordingTime((prev) => prev + 1);
-    }, 1000);
-  };
-
-  const stopDemoRecording = () => {
-    setIsRecording(false);
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-  };
-
   const fullTranscript = transcript + interimTranscript;
 
   return (
