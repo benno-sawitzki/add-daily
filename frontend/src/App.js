@@ -1,11 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
 import axios from "axios";
 import { Toaster, toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,24 +14,20 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   Mic,
-  MicOff,
   Inbox,
   Calendar,
   CalendarDays,
   CheckCircle2,
-  Trash2,
-  Clock,
   Zap,
   ChevronDown,
-  Settings,
   Brain,
   Sparkles,
-  X,
 } from "lucide-react";
 import TaskInbox from "@/components/TaskInbox";
 import WeeklyCalendar from "@/components/WeeklyCalendar";
 import DailyCalendar from "@/components/DailyCalendar";
 import VoiceOverlay from "@/components/VoiceOverlay";
+import TaskQueue from "@/components/TaskQueue";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -57,6 +51,8 @@ function App() {
     ai_model: "gpt-5.2",
   });
   const [isLoading, setIsLoading] = useState(false);
+  const [queuedTasks, setQueuedTasks] = useState([]);
+  const [showTaskQueue, setShowTaskQueue] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -104,20 +100,39 @@ function App() {
     }
   };
 
+  // Delete a queued task (before pushing to calendar)
+  const deleteQueuedTask = (taskId) => {
+    setQueuedTasks(prev => prev.filter(t => t.id !== taskId));
+  };
+
+  // Update a queued task (before pushing to calendar)
+  const updateQueuedTask = (taskId, updates) => {
+    setQueuedTasks(prev => prev.map(t => 
+      t.id === taskId ? { ...t, ...updates } : t
+    ));
+  };
+
+  // Reorder queued tasks
+  const reorderQueuedTasks = (newOrder) => {
+    setQueuedTasks(newOrder);
+  };
+
   const processVoiceInput = async (transcript) => {
     setIsLoading(true);
     try {
-      const response = await axios.post(`${API}/tasks/process-voice`, {
+      const response = await axios.post(`${API}/tasks/process-voice-queue`, {
         transcript,
         model: settings.ai_model,
         provider: settings.ai_provider,
       });
-      await fetchTasks();
-      toast.success(response.data.summary || "Tasks created!");
       
-      // Switch to weekly view if urgent tasks were scheduled
-      if (response.data.should_show_calendar) {
-        setActiveView("weekly");
+      // Show task queue instead of pushing directly to calendar
+      if (response.data.tasks && response.data.tasks.length > 0) {
+        setQueuedTasks(response.data.tasks);
+        setShowTaskQueue(true);
+        setIsVoiceActive(false);
+      } else {
+        toast.info("No tasks found in your input");
       }
       
       return response.data;
@@ -128,6 +143,29 @@ function App() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Push queued tasks to calendar
+  const pushToCalendar = async () => {
+    try {
+      const response = await axios.post(`${API}/tasks/push-to-calendar`, {
+        tasks: queuedTasks,
+      });
+      
+      await fetchTasks();
+      setShowTaskQueue(false);
+      setQueuedTasks([]);
+      setActiveView("weekly");
+      toast.success(`${queuedTasks.length} tasks scheduled!`);
+    } catch (error) {
+      console.error("Error pushing to calendar:", error);
+      toast.error("Failed to push tasks to calendar");
+    }
+  };
+
+  const cancelTaskQueue = () => {
+    setShowTaskQueue(false);
+    setQueuedTasks([]);
   };
 
   const updateSettings = async (provider, model) => {
@@ -145,8 +183,6 @@ function App() {
   };
 
   const inboxTasks = tasks.filter((t) => t.status === "inbox");
-  const scheduledTasks = tasks.filter((t) => t.status === "scheduled");
-  const completedTasks = tasks.filter((t) => t.status === "completed");
 
   const getModelDisplayName = () => {
     const allModels = [...AI_MODELS.openai, ...AI_MODELS.gemini];
@@ -292,6 +328,18 @@ function App() {
           onClose={() => setIsVoiceActive(false)}
           onProcess={processVoiceInput}
           isLoading={isLoading}
+        />
+      )}
+
+      {/* Task Queue */}
+      {showTaskQueue && (
+        <TaskQueue
+          tasks={queuedTasks}
+          onReorder={reorderQueuedTasks}
+          onUpdateTask={updateQueuedTask}
+          onDeleteTask={deleteQueuedTask}
+          onPushToCalendar={pushToCalendar}
+          onClose={cancelTaskQueue}
         />
       )}
     </div>
