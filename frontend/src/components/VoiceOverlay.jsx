@@ -10,13 +10,15 @@ const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 // ============================================
-// VU Meter Ring Component - Apple-like minimal design
+// VU Meter Ring Component - Dramatic amplitude response
 // ============================================
 function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const currentLevelRef = useRef(0);
   const glowLevelRef = useRef(0);
+  const breathePhaseRef = useRef(0);
+  const timeRef = useRef(Date.now());
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -32,51 +34,91 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
 
     const centerX = size / 2;
     const centerY = size / 2;
-    const baseRadius = size / 2 - 20;
+    const baseRadius = size / 2 - 35; // Smaller base to allow more expansion room
 
     const draw = () => {
-      // Smooth interpolation towards target level
-      const targetLevel = isRecording ? level : 0;
-      currentLevelRef.current += (targetLevel - currentLevelRef.current) * 0.12;
+      const now = Date.now();
+      const deltaTime = (now - timeRef.current) / 1000;
+      timeRef.current = now;
+
+      // === Apply gain curve to make mid-level speech more visible ===
+      // Using pow(level, 0.5) makes 0.25 input → 0.5 output, 0.5 input → 0.71 output
+      const boostedLevel = Math.pow(level, 0.5);
+      const targetLevel = isRecording ? boostedLevel : 0;
       
-      // Glow follows with more decay (slower to fade)
-      glowLevelRef.current += (currentLevelRef.current - glowLevelRef.current) * 0.08;
+      // === Fast attack, slower decay smoothing ===
+      const attackSpeed = 0.25; // Fast attack
+      const decaySpeed = 0.08;  // Slower decay
+      const smoothingSpeed = targetLevel > currentLevelRef.current ? attackSpeed : decaySpeed;
+      currentLevelRef.current += (targetLevel - currentLevelRef.current) * smoothingSpeed;
+      
+      // Glow follows with even slower decay for trailing effect
+      glowLevelRef.current += (currentLevelRef.current - glowLevelRef.current) * 0.06;
 
       const currentLevel = currentLevelRef.current;
       const glowLevel = glowLevelRef.current;
 
+      // === Idle breathing animation ===
+      breathePhaseRef.current += deltaTime * 1.5; // Slow breathing cycle
+      const breathe = Math.sin(breathePhaseRef.current) * 0.5 + 0.5; // 0 to 1
+      const idleBreathAmount = isRecording && currentLevel < 0.05 ? breathe * 3 : 0;
+      const notRecordingBreath = !isRecording ? breathe * 2 : 0;
+
       ctx.clearRect(0, 0, size, size);
 
-      // === Outer glow layer (softest, largest) ===
-      if (isRecording && glowLevel > 0.01) {
-        const outerGlowRadius = baseRadius + 8 + glowLevel * 12;
+      // === Outer glow layer (dramatic expansion) ===
+      if (isRecording || notRecordingBreath > 0) {
+        const glowIntensity = Math.max(glowLevel, notRecordingBreath * 0.1);
+        const outerGlowRadius = baseRadius + 15 + glowLevel * 35 + idleBreathAmount + notRecordingBreath;
         const outerGlow = ctx.createRadialGradient(
-          centerX, centerY, baseRadius - 5,
-          centerX, centerY, outerGlowRadius + 15
+          centerX, centerY, baseRadius,
+          centerX, centerY, outerGlowRadius + 20
         );
+        const glowAlpha = Math.min(0.4, glowIntensity * 0.5 + 0.05);
         outerGlow.addColorStop(0, `rgba(244, 63, 94, 0)`);
-        outerGlow.addColorStop(0.4, `rgba(244, 63, 94, ${glowLevel * 0.15})`);
-        outerGlow.addColorStop(0.7, `rgba(244, 63, 94, ${glowLevel * 0.08})`);
+        outerGlow.addColorStop(0.3, `rgba(244, 63, 94, ${glowAlpha * 0.6})`);
+        outerGlow.addColorStop(0.6, `rgba(244, 63, 94, ${glowAlpha * 0.3})`);
         outerGlow.addColorStop(1, `rgba(244, 63, 94, 0)`);
         
         ctx.beginPath();
-        ctx.arc(centerX, centerY, outerGlowRadius + 15, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, outerGlowRadius + 20, 0, Math.PI * 2);
         ctx.fillStyle = outerGlow;
         ctx.fill();
       }
 
-      // === Main ring ===
-      const ringThickness = 3 + currentLevel * 4;
-      const ringRadius = baseRadius + currentLevel * 6;
-      const ringAlpha = isRecording ? (0.3 + currentLevel * 0.7) : 0.15;
+      // === Secondary glow ring (mid layer) ===
+      if (isRecording && glowLevel > 0.02) {
+        const midGlowRadius = baseRadius + 8 + glowLevel * 25;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, midGlowRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(244, 63, 94, ${glowLevel * 0.35})`;
+        ctx.lineWidth = 4 + glowLevel * 8;
+        ctx.filter = "blur(8px)";
+        ctx.stroke();
+        ctx.filter = "none";
+      }
 
-      // Ring glow (blur effect)
-      if (isRecording && currentLevel > 0.05) {
+      // === Main ring with dramatic expansion ===
+      // Stroke width: 3px idle → up to 9px at max (6px change)
+      const ringThickness = 3 + currentLevel * 6 + idleBreathAmount * 0.3 + notRecordingBreath * 0.2;
+      // Radius expansion: +10-18px at normal speech, +24-32px at loud
+      // With boosted level, normal speech (~0.3 raw → ~0.55 boosted) gives +15-18px
+      // Loud speech (~0.7 raw → ~0.84 boosted) gives +25-28px
+      const radiusExpansion = currentLevel * 32 + idleBreathAmount + notRecordingBreath;
+      const ringRadius = baseRadius + radiusExpansion;
+      
+      // Opacity ramps clearly with level
+      const ringAlpha = isRecording 
+        ? Math.min(1, 0.4 + currentLevel * 0.6) 
+        : (0.15 + notRecordingBreath * 0.1);
+
+      // Ring glow (blur effect) - more intense
+      if ((isRecording && currentLevel > 0.02) || notRecordingBreath > 0) {
         ctx.beginPath();
         ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(244, 63, 94, ${currentLevel * 0.4})`;
-        ctx.lineWidth = ringThickness + 8;
-        ctx.lineCap = "round";
+        const blurAlpha = Math.max(currentLevel * 0.5, notRecordingBreath * 0.15);
+        ctx.strokeStyle = `rgba(244, 63, 94, ${blurAlpha})`;
+        ctx.lineWidth = ringThickness + 10 + currentLevel * 6;
         ctx.filter = "blur(6px)";
         ctx.stroke();
         ctx.filter = "none";
@@ -87,16 +129,18 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
       ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
       ctx.strokeStyle = isRecording 
         ? `rgba(244, 63, 94, ${ringAlpha})` 
-        : `rgba(148, 163, 184, 0.2)`;
+        : `rgba(244, 63, 94, ${0.2 + notRecordingBreath * 0.15})`;
       ctx.lineWidth = ringThickness;
       ctx.lineCap = "round";
       ctx.stroke();
 
-      // === Inner subtle ring (idle indicator) ===
-      if (!isRecording || currentLevel < 0.1) {
+      // === Inner accent ring (shows at high levels) ===
+      if (isRecording && currentLevel > 0.4) {
+        const innerRingAlpha = (currentLevel - 0.4) * 0.5;
+        const innerRadius = baseRadius + radiusExpansion * 0.3;
         ctx.beginPath();
-        ctx.arc(centerX, centerY, baseRadius - 2, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(148, 163, 184, ${0.1 - currentLevel * 0.1})`;
+        ctx.arc(centerX, centerY, innerRadius, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(255, 255, 255, ${innerRingAlpha})`;
         ctx.lineWidth = 1.5;
         ctx.stroke();
       }
