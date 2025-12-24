@@ -181,8 +181,8 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
             </div>
           </div>
 
-          {/* Date & Time */}
-          <div className="grid grid-cols-2 gap-4">
+          {/* Date & Time & Duration */}
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Date</Label>
               <Popover>
@@ -194,8 +194,8 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
                   >
                     <CalendarIcon className="mr-2 h-4 w-4" />
                     {formData.scheduled_date
-                      ? format(parseISO(formData.scheduled_date), "MMM d, yyyy")
-                      : "Pick a date"}
+                      ? format(parseISO(formData.scheduled_date), "MMM d")
+                      : "Pick date"}
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
@@ -229,7 +229,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
                 disabled={!formData.scheduled_date}
               >
                 <SelectTrigger data-testid="time-select">
-                  <SelectValue placeholder="Select time" />
+                  <SelectValue placeholder="Time" />
                 </SelectTrigger>
                 <SelectContent>
                   {TIME_OPTIONS.map((time) => (
@@ -237,6 +237,26 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
                       {format(new Date().setHours(parseInt(time.split(":")[0]), parseInt(time.split(":")[1])), "h:mm a")}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Duration</Label>
+              <Select
+                value={formData.duration}
+                onValueChange={(value) => setFormData({ ...formData, duration: value })}
+              >
+                <SelectTrigger data-testid="duration-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="30">30 min</SelectItem>
+                  <SelectItem value="60">1 hour</SelectItem>
+                  <SelectItem value="90">1.5 hours</SelectItem>
+                  <SelectItem value="120">2 hours</SelectItem>
+                  <SelectItem value="180">3 hours</SelectItem>
+                  <SelectItem value="240">4 hours</SelectItem>
                 </SelectContent>
               </Select>
             </div>
