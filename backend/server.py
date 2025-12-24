@@ -511,17 +511,21 @@ async def export_ical():
         ]
         
         for task in tasks:
-            if not task.get("scheduled_date"):
+            scheduled_date = task.get("scheduled_date")
+            scheduled_time = task.get("scheduled_time", "09:00") or "09:00"
+            
+            if not scheduled_date:
                 continue
                 
             # Parse date and time
-            date_str = task["scheduled_date"].replace("-", "")
-            time_str = task.get("scheduled_time", "09:00").replace(":", "") + "00"
+            date_str = scheduled_date.replace("-", "")
+            time_str = scheduled_time.replace(":", "") + "00"
             
             # Calculate end time based on duration
-            duration_mins = task.get("duration", 30)
-            start_hour = int(task.get("scheduled_time", "09:00").split(":")[0])
-            start_min = int(task.get("scheduled_time", "09:00").split(":")[1])
+            duration_mins = task.get("duration", 30) or 30
+            time_parts = scheduled_time.split(":")
+            start_hour = int(time_parts[0]) if len(time_parts) > 0 else 9
+            start_min = int(time_parts[1]) if len(time_parts) > 1 else 0
             
             end_min = start_min + duration_mins
             end_hour = start_hour
@@ -535,8 +539,8 @@ async def export_ical():
             uid = task.get("id", str(uuid.uuid4()))
             
             # Escape special characters in text
-            title = task.get("title", "Untitled").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
-            description = task.get("description", "").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+            title = (task.get("title") or "Untitled").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+            description = (task.get("description") or "").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
             
             # Priority mapping (iCal: 1=high, 5=medium, 9=low)
             priority_map = {4: 1, 3: 3, 2: 5, 1: 9}
