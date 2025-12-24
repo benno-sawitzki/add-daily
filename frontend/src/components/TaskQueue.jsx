@@ -190,7 +190,7 @@ export default function TaskQueue({
                   `}
                   style={{
                     transform: transform,
-                    transition: draggedIndex !== null ? "transform 150ms ease" : "none",
+                    transition: (draggedIndex !== null && !isReordering) ? "transform 150ms ease" : "none",
                   }}
                   data-testid={`queue-task-${task.id}`}
                 >
