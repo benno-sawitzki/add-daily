@@ -114,6 +114,12 @@ function App() {
       });
       await fetchTasks();
       toast.success(response.data.summary || "Tasks created!");
+      
+      // Switch to weekly view if urgent tasks were scheduled
+      if (response.data.should_show_calendar) {
+        setActiveView("weekly");
+      }
+      
       return response.data;
     } catch (error) {
       console.error("Error processing voice:", error);
