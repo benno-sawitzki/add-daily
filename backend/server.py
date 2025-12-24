@@ -43,7 +43,13 @@ async def get_db_pool():
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
-        db_pool = await asyncpg.create_pool(DATABASE_URL, ssl=ssl_ctx, min_size=1, max_size=10)
+        db_pool = await asyncpg.create_pool(
+            DATABASE_URL, 
+            ssl=ssl_ctx, 
+            min_size=1, 
+            max_size=10,
+            statement_cache_size=0  # Required for Supabase transaction pooler
+        )
     return db_pool
 
 # Create the main app with docs at /api/docs
