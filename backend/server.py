@@ -958,55 +958,14 @@ async def google_disconnect():
 
 
 async def get_google_credentials():
-    """Get valid Google credentials, refreshing if needed"""
-    connection = await db.google_auth.find_one({"id": "google_connection"})
-    if not connection or not connection.get('access_token'):
-        return None
-    
-    creds = Credentials(
-        token=connection['access_token'],
-        refresh_token=connection.get('refresh_token'),
-        token_uri='https://oauth2.googleapis.com/token',
-        client_id=GOOGLE_CLIENT_ID,
-        client_secret=GOOGLE_CLIENT_SECRET
-    )
-    
-    # Refresh if expired
-    if creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(GoogleRequest())
-            await db.google_auth.update_one(
-                {"id": "google_connection"},
-                {"$set": {
-                    "access_token": creds.token,
-                    "expires_at": datetime.now(timezone.utc) + timedelta(seconds=3600)
-                }}
-            )
-        except Exception as e:
-            logger.error(f"Token refresh failed: {e}")
-            return None
-    
-    return creds
+    """Get valid Google credentials - DISABLED"""
+    return None
 
 
 @api_router.post("/calendar/sync")
 async def sync_to_google_calendar():
-    """Sync all scheduled tasks to Google Calendar"""
-    creds = await get_google_credentials()
-    if not creds:
-        raise HTTPException(status_code=401, detail="Google Calendar not connected")
-    
-    try:
-        service = build('calendar', 'v3', credentials=creds)
-        
-        # Get all scheduled tasks
-        tasks = await db.tasks.find(
-            {"status": "scheduled", "scheduled_date": {"$ne": None}},
-            {"_id": 0}
-        ).to_list(1000)
-        
-        synced_count = 0
-        errors = []
+    """Sync all scheduled tasks to Google Calendar - DISABLED"""
+    raise HTTPException(status_code=503, detail="Google Calendar sync is currently disabled")
         
         for task in tasks:
             try:
