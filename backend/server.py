@@ -241,6 +241,41 @@ class PushToCalendarRequest(BaseModel):
     tasks: List[dict]
 
 
+# Push tasks to inbox
+@api_router.post("/tasks/push-to-inbox")
+async def push_to_inbox(request: PushToCalendarRequest):
+    """Save tasks to inbox (not scheduled)"""
+    try:
+        created_tasks = []
+        
+        for task_data in request.tasks:
+            task = Task(
+                id=task_data.get("id", str(uuid.uuid4())),
+                title=task_data.get("title", "Untitled Task"),
+                description=task_data.get("description", ""),
+                urgency=task_data.get("urgency", 2),
+                importance=task_data.get("importance", 2),
+                priority=task_data.get("priority", 2),
+                duration=task_data.get("duration", 30),
+                scheduled_date=None,
+                scheduled_time=None,
+                status="inbox"
+            )
+            
+            doc = task.model_dump()
+            await db.tasks.insert_one(doc)
+            created_tasks.append(task)
+        
+        return {
+            "success": True,
+            "tasks": [t.model_dump() for t in created_tasks],
+            "message": f"{len(created_tasks)} tasks added to inbox"
+        }
+    except Exception as e:
+        logger.error(f"Error pushing to inbox: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Push tasks to calendar
 @api_router.post("/tasks/push-to-calendar")
 async def push_to_calendar(request: PushToCalendarRequest):
