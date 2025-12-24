@@ -256,16 +256,20 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           </p>
         )}
 
-        {/* Transcript display */}
-        <div className="w-full bg-card/50 backdrop-blur-xl rounded-2xl p-6 min-h-[120px] mb-6 border border-border/30">
-          <p className="text-foreground">
-            {transcript}
-            <span className="text-muted-foreground">{interimTranscript}</span>
-            {!transcript && !interimTranscript && (
-              <span className="text-muted-foreground italic">Your transcribed text will appear here...</span>
-            )}
-          </p>
-        </div>
+        {/* Transcript display - only show in voice mode */}
+        {!useTextInput && (
+          <div className="w-full bg-card/50 backdrop-blur-xl rounded-2xl p-6 min-h-[120px] mb-6 border border-border/30">
+            <p className="text-foreground">
+              {transcript}
+              <span className="text-muted-foreground">{interimTranscript}</span>
+              {!transcript && !interimTranscript && (
+                <span className="text-muted-foreground italic">Your transcribed text will appear here...</span>
+              )}
+            </p>
+          </div>
+        )}
+        </>
+        )}
 
         {/* Action buttons */}
         <div className="flex gap-4">
