@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -36,6 +36,8 @@ const PRIORITY_LABELS = {
   1: "Low",
 };
 
+const ITEM_HEIGHT = 72; // Height of each task item including margin
+
 export default function TaskQueue({ 
   tasks, 
   onReorder, 
@@ -46,52 +48,42 @@ export default function TaskQueue({
   onClose 
 }) {
   const [draggedIndex, setDraggedIndex] = useState(null);
+  const [overIndex, setOverIndex] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
-  
-  // Maintain a local visual order that updates immediately during drag
-  const [visualTasks, setVisualTasks] = useState(tasks);
-  
-  // Sync visual tasks when props change (but not during active drag)
-  useEffect(() => {
-    if (draggedIndex === null) {
-      setVisualTasks(tasks);
-    }
-  }, [tasks, draggedIndex]);
 
   const handleDragStart = (e, index) => {
     setDraggedIndex(index);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", index);
-    
-    // Add a drag image with some transparency
-    const target = e.currentTarget;
-    if (target) {
-      e.dataTransfer.setDragImage(target, target.offsetWidth / 2, target.offsetHeight / 2);
-    }
   };
 
   const handleDragOver = (e, index) => {
     e.preventDefault();
     if (draggedIndex !== null && index !== draggedIndex) {
-      // Immediately reorder the visual list
-      setVisualTasks(prevTasks => {
-        const newTasks = [...prevTasks];
-        const [removed] = newTasks.splice(draggedIndex, 1);
-        newTasks.splice(index, 0, removed);
-        return newTasks;
-      });
-      // Update the dragged index to reflect new position
-      setDraggedIndex(index);
+      setOverIndex(index);
     }
   };
 
+  const handleDragLeave = () => {
+    // Don't clear overIndex on leave - only clear when dropping or ending
+  };
+
   const handleDragEnd = () => {
-    if (draggedIndex !== null) {
-      // Commit the visual order to parent
-      onReorder(visualTasks);
+    if (draggedIndex !== null && overIndex !== null && draggedIndex !== overIndex) {
+      // Create new order
+      const newTasks = [...tasks];
+      const [removed] = newTasks.splice(draggedIndex, 1);
+      newTasks.splice(overIndex, 0, removed);
+      onReorder(newTasks);
     }
     setDraggedIndex(null);
+    setOverIndex(null);
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    handleDragEnd();
   };
 
   const handleDurationChange = (taskId, duration) => {
