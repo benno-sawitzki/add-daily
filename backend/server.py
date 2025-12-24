@@ -250,6 +250,48 @@ async def update_settings(settings_update: SettingsUpdate):
     settings = await db.settings.find_one({"id": "user_settings"}, {"_id": 0})
     return settings
 
+# Whisper Speech-to-Text endpoint
+@api_router.post("/transcribe")
+async def transcribe_audio(audio: UploadFile = File(...)):
+    """Transcribe audio using OpenAI Whisper"""
+    api_key = os.environ.get('EMERGENT_LLM_KEY')
+    if not api_key:
+        raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+    
+    try:
+        # Save uploaded file to temp location
+        suffix = Path(audio.filename).suffix if audio.filename else ".webm"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await audio.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        # Transcribe using Whisper
+        stt = OpenAISpeechToText(api_key=api_key)
+        
+        with open(tmp_path, "rb") as audio_file:
+            response = await stt.transcribe(
+                file=audio_file,
+                model="whisper-1",
+                response_format="json",
+                language="en"
+            )
+        
+        # Clean up temp file
+        os.unlink(tmp_path)
+        
+        return {"success": True, "transcript": response.text}
+        
+    except Exception as e:
+        logger.error(f"Whisper transcription error: {str(e)}")
+        # Clean up temp file on error
+        if 'tmp_path' in locals():
+            try:
+                os.unlink(tmp_path)
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
+
 # Include the router in the main app
 app.include_router(api_router)
 
