@@ -411,7 +411,10 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                 opacity: 0.85,
               }}
             >
-              <div className={`h-full rounded-lg ${PRIORITY_COLORS[draggingTask.priority] || PRIORITY_COLORS[2]} p-1.5 text-xs font-medium shadow-xl border border-white/20`}>
+              <div 
+                className="h-full rounded-lg p-1.5 text-xs font-medium shadow-xl border border-white/20"
+                style={PRIORITY_STYLES[draggingTask.priority] || PRIORITY_STYLES[2]}
+              >
                 <span className="truncate block">{draggingTask.title}</span>
               </div>
             </div>
