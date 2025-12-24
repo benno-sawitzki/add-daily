@@ -109,11 +109,18 @@ async def get_ai_response(transcript: str, provider: str, model: str) -> dict:
     system_message = """You are a task extraction and prioritization AI. Extract tasks from user's voice input.
     
 For each task, determine:
-- title: A clear, concise task title
+- title: A clear, concise task title (remove any duration mentions from the title)
 - description: Additional details if provided
 - urgency: 1-4 scale (1=not urgent, 4=extremely urgent)
 - importance: 1-4 scale (1=not important, 4=very important)
 - priority: Calculate as (urgency + importance) / 2, round to nearest integer
+- duration: Duration in MINUTES. Listen for phrases like:
+  - "for an hour" or "one hour" or "1 hour" = 60
+  - "30 minutes" or "half an hour" = 30
+  - "2 hours" or "two hours" = 120
+  - "15 minutes" or "quarter hour" = 15
+  - "should take about X" or "takes X" = extract X
+  - If no duration mentioned, use null
 
 Respond ONLY with a JSON object in this exact format:
 {
@@ -123,7 +130,8 @@ Respond ONLY with a JSON object in this exact format:
       "description": "string",
       "urgency": number,
       "importance": number,
-      "priority": number
+      "priority": number,
+      "duration": number or null
     }
   ],
   "summary": "Brief summary of what was extracted"
