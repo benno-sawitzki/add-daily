@@ -281,12 +281,12 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                         onDragStart={(e) => handleDragStart(e, task)}
                         onDragEnd={handleDragEnd}
                         onClick={(e) => handleTaskClick(e, task)}
-                        className={`group absolute left-0.5 right-0.5 rounded font-medium cursor-grab active:cursor-grabbing ${colors} overflow-hidden z-10`}
-                        style={{ height: `${taskHeight}px`, top: '2px' }}
+                        className={`group absolute left-0.5 right-0.5 rounded font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
+                        style={{ height: `${taskHeight}px`, top: '2px', overflow: 'hidden' }}
                       >
-                        <div className="p-2 h-full flex flex-col">
-                          <div className="flex items-center justify-between">
-                            <span className="truncate text-sm">{task.title}</span>
+                        <div className="p-2 h-full flex flex-col overflow-hidden">
+                          <div className="flex items-center justify-between overflow-hidden">
+                            <span className="truncate text-sm block flex-1 min-w-0">{task.title}</span>
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 flex-shrink-0 ml-2">
                               <button
                                 onClick={(e) => handleComplete(e, task.id)}
