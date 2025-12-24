@@ -207,6 +207,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                             draggable
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}
+                            onClick={(e) => handleTaskClick(e, task)}
                             className={`group flex items-center justify-between px-2 py-1 rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors}`}
                           >
                             <span className="truncate">{task.title}</span>
