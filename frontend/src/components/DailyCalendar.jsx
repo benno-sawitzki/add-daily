@@ -11,6 +11,8 @@ const PRIORITY_COLORS = {
   1: "bg-slate-500 text-white",
 };
 
+const SLOT_HEIGHT = 40; // Height of each 30-min slot in pixels
+
 // Generate time slots from 6 AM to 10 PM in 30-min intervals
 const TIME_SLOTS = [];
 for (let hour = 6; hour <= 22; hour++) {
@@ -23,8 +25,11 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [dropTarget, setDropTarget] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [resizing, setResizing] = useState(null);
   const timeLineRef = useRef(null);
   const dragTaskRef = useRef(null);
+  const resizeStartY = useRef(null);
+  const resizeStartDuration = useRef(null);
 
   const dateStr = format(currentDate, "yyyy-MM-dd");
 
@@ -59,15 +64,14 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const getCurrentTimePosition = () => {
     const hours = currentTime.getHours();
     const minutes = currentTime.getMinutes();
-    // Each slot is 32px height, 2 slots per hour
-    // Starting from 6 AM
     if (hours < 6 || hours > 22) return null;
     const slotIndex = (hours - 6) * 2 + (minutes >= 30 ? 1 : 0);
-    const minuteOffset = (minutes % 30) / 30 * 32;
-    return slotIndex * 32 + minuteOffset;
+    const minuteOffset = (minutes % 30) / 30 * SLOT_HEIGHT;
+    return slotIndex * SLOT_HEIGHT + minuteOffset;
   };
 
   const handleDragStart = (e, task) => {
+    if (resizing) return;
     dragTaskRef.current = task;
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("taskId", task.id);
@@ -117,10 +121,48 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   };
 
   const handleTaskClick = (e, task) => {
-    if (!dragTaskRef.current) {
+    if (!dragTaskRef.current && !resizing) {
       e.stopPropagation();
       setEditingTask(task);
     }
+  };
+
+  // Resize handlers
+  const handleResizeStart = (e, task) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setResizing(task.id);
+    resizeStartY.current = e.clientY;
+    resizeStartDuration.current = task.duration || 30;
+
+    const handleMouseMove = (moveEvent) => {
+      const deltaY = moveEvent.clientY - resizeStartY.current;
+      const deltaSlots = Math.round(deltaY / SLOT_HEIGHT);
+      const newDuration = Math.max(30, resizeStartDuration.current + deltaSlots * 30);
+      
+      const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
+      if (taskEl) {
+        const slots = newDuration / 30;
+        taskEl.style.height = `${slots * SLOT_HEIGHT - 4}px`;
+      }
+    };
+
+    const handleMouseUp = (upEvent) => {
+      const deltaY = upEvent.clientY - resizeStartY.current;
+      const deltaSlots = Math.round(deltaY / SLOT_HEIGHT);
+      const newDuration = Math.max(30, resizeStartDuration.current + deltaSlots * 30);
+      
+      if (newDuration !== resizeStartDuration.current) {
+        onUpdateTask(task.id, { duration: newDuration });
+      }
+      
+      setResizing(null);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
   };
 
   const timePosition = isToday(currentDate) ? getCurrentTimePosition() : null;
@@ -203,6 +245,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
               <div
                 key={time}
                 className={`grid grid-cols-[70px_1fr] ${isHourMark ? "border-t border-border/40" : ""}`}
+                style={{ height: `${SLOT_HEIGHT}px` }}
               >
                 {/* Time Label */}
                 <div className="py-2 px-2 text-right border-r border-border/20">
@@ -218,36 +261,59 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                   onDragOver={(e) => handleDragOver(e, time)}
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, time)}
-                  className={`min-h-[32px] border-b border-border/10 p-0.5
+                  className={`relative border-b border-border/10 p-0.5
                     ${isDropHere ? "bg-primary/30 ring-2 ring-inset ring-primary" : ""}
                   `}
+                  style={{ height: `${SLOT_HEIGHT}px` }}
                 >
                   {slotTasks.map((task) => {
                     const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+                    const duration = task.duration || 30;
+                    const slots = duration / 30;
+                    const taskHeight = slots * SLOT_HEIGHT - 4;
 
                     return (
                       <div
                         key={task.id}
-                        draggable
+                        data-task-id={task.id}
+                        draggable={!resizing}
                         onDragStart={(e) => handleDragStart(e, task)}
                         onDragEnd={handleDragEnd}
                         onClick={(e) => handleTaskClick(e, task)}
-                        className={`group flex items-center justify-between px-3 py-1.5 rounded text-sm font-medium cursor-grab active:cursor-grabbing ${colors}`}
+                        className={`group absolute left-0.5 right-0.5 rounded font-medium cursor-grab active:cursor-grabbing ${colors} overflow-hidden z-10`}
+                        style={{ height: `${taskHeight}px`, top: '2px' }}
                       >
-                        <span className="truncate">{task.title}</span>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 flex-shrink-0 ml-2">
-                          <button
-                            onClick={(e) => handleComplete(e, task.id)}
-                            className="p-1 hover:bg-white/30 rounded"
-                          >
-                            <CheckCircle2 className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={(e) => handleDelete(e, task.id)}
-                            className="p-1 hover:bg-white/30 rounded"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                        <div className="p-2 h-full flex flex-col">
+                          <div className="flex items-center justify-between">
+                            <span className="truncate text-sm">{task.title}</span>
+                            <div className="flex gap-1 opacity-0 group-hover:opacity-100 flex-shrink-0 ml-2">
+                              <button
+                                onClick={(e) => handleComplete(e, task.id)}
+                                className="p-1 hover:bg-white/30 rounded"
+                              >
+                                <CheckCircle2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={(e) => handleDelete(e, task.id)}
+                                className="p-1 hover:bg-white/30 rounded"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+                          {duration > 30 && (
+                            <span className="text-xs opacity-70 mt-1">
+                              {duration} min
+                            </span>
+                          )}
+                        </div>
+                        
+                        {/* Resize handle */}
+                        <div
+                          onMouseDown={(e) => handleResizeStart(e, task)}
+                          className="absolute bottom-0 left-0 right-0 h-3 cursor-ns-resize hover:bg-white/20 flex items-center justify-center"
+                        >
+                          <div className="w-12 h-1 rounded-full bg-white/40" />
                         </div>
                       </div>
                     );
