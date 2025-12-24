@@ -51,6 +51,57 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     });
   };
 
+  // Get all tasks that overlap with a given time slot
+  const getOverlappingTasks = (dateStr, time) => {
+    const [slotHour, slotMin] = time.split(":").map(Number);
+    const slotStart = slotHour * 60 + slotMin;
+    
+    return scheduledTasks.filter((t) => {
+      if (t.scheduled_date !== dateStr) return false;
+      if (!t.scheduled_time) return false;
+      
+      const [taskHour, taskMin] = t.scheduled_time.split(":").map(Number);
+      const taskStart = taskHour * 60 + taskMin;
+      const taskEnd = taskStart + (t.duration || 30);
+      
+      // Check if task overlaps with this slot
+      return taskStart <= slotStart && taskEnd > slotStart;
+    });
+  };
+
+  // Calculate position for overlapping tasks
+  const getTaskPosition = (task, dateStr) => {
+    const [taskHour, taskMin] = task.scheduled_time.split(":").map(Number);
+    const taskStart = taskHour * 60 + taskMin;
+    const taskEnd = taskStart + (task.duration || 30);
+    
+    // Find all tasks that overlap with this task
+    const overlapping = scheduledTasks.filter((t) => {
+      if (t.scheduled_date !== dateStr) return false;
+      if (!t.scheduled_time) return false;
+      
+      const [tHour, tMin] = t.scheduled_time.split(":").map(Number);
+      const tStart = tHour * 60 + tMin;
+      const tEnd = tStart + (t.duration || 30);
+      
+      // Check for any overlap
+      return (taskStart < tEnd && taskEnd > tStart);
+    });
+    
+    // Sort by start time, then by id for consistent ordering
+    overlapping.sort((a, b) => {
+      const aTime = a.scheduled_time;
+      const bTime = b.scheduled_time;
+      if (aTime !== bTime) return aTime.localeCompare(bTime);
+      return a.id.localeCompare(b.id);
+    });
+    
+    const index = overlapping.findIndex((t) => t.id === task.id);
+    const total = overlapping.length;
+    
+    return { index, total };
+  };
+
   const handleDragStart = (e, task) => {
     if (resizing) return;
     dragTaskRef.current = task;
