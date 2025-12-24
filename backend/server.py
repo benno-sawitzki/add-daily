@@ -1154,15 +1154,23 @@ async def google_callback_root(code: str = Query(None)):
     return RedirectResponse(f"{FRONTEND_URL}?google_error=Google Calendar sync is currently disabled")
 
 # CORS configuration
-cors_origins_str = os.environ.get('CORS_ORIGINS', '*')
+# Note: When allow_credentials=True, you cannot use allow_origins=['*']
+# Must specify exact origins. Default includes common development URLs.
+default_origins = 'http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000'
+cors_origins_str = os.environ.get('CORS_ORIGINS', default_origins)
+
 if cors_origins_str == '*':
+    # If '*' is specified, disable credentials (security requirement)
     cors_origins = ['*']
+    allow_creds = False
 else:
-    cors_origins = [origin.strip() for origin in cors_origins_str.split(',')]
+    # Parse comma-separated origins
+    cors_origins = [origin.strip() for origin in cors_origins_str.split(',') if origin.strip()]
+    allow_creds = True
 
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
+    allow_credentials=allow_creds,
     allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
