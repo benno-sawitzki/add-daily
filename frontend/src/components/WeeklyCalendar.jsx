@@ -6,6 +6,14 @@ import TaskEditDialog from "./TaskEditDialog";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
+// Use inline style colors for dynamic priority coloring
+const PRIORITY_STYLES = {
+  4: { backgroundColor: "#f43f5e", color: "white" }, // rose-500
+  3: { backgroundColor: "#f59e0b", color: "white" }, // amber-500
+  2: { backgroundColor: "#6366f1", color: "white" }, // indigo-500
+  1: { backgroundColor: "#64748b", color: "white" }, // slate-500
+};
+
 const PRIORITY_COLORS = {
   4: "bg-rose-500 text-white",
   3: "bg-amber-500 text-white",
