@@ -305,13 +305,15 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               </p>
             )}
 
-            {/* Transcript display */}
-            <div className="w-full bg-card/50 backdrop-blur-xl rounded-2xl p-6 min-h-[120px] mb-6 border border-border/30">
-              <p className="text-foreground">
-                {transcript || (
-                  <span className="text-muted-foreground italic">Your transcribed text will appear here...</span>
-                )}
-              </p>
+            {/* Transcript display - editable */}
+            <div className="w-full mb-6">
+              <Textarea
+                value={transcript}
+                onChange={(e) => setTranscript(e.target.value)}
+                placeholder="Your transcribed text will appear here... You can also type or edit."
+                className="min-h-[120px] bg-card/50 backdrop-blur-xl border-border/30 text-base resize-none"
+                data-testid="transcript-textarea"
+              />
             </div>
           </>
         )}
