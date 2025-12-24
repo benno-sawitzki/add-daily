@@ -65,7 +65,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     }
   }, []); // Only run on mount
 
-  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1));
+  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const scheduledTasks = tasks.filter((t) => t.status === "scheduled" && t.scheduled_date);
