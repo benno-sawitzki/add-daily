@@ -152,12 +152,11 @@ export default function TaskQueue({
         </div>
 
         {/* Task List - Fixed height container */}
-        <div className="p-4 overflow-y-auto flex-1" style={{ minHeight: `${Math.min(tasks.length * 68 + 16, 340)}px` }}>
+        <div className="p-4 overflow-y-auto flex-1" style={{ minHeight: `${Math.min(visualTasks.length * 68 + 16, 340)}px` }}>
           <div className="relative">
-            {tasks.map((task, index) => {
+            {visualTasks.map((task, index) => {
               const priorityColor = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
               const isDragging = draggedIndex === index;
-              const transform = getTransform(index);
 
               return (
                 <div
@@ -168,14 +167,10 @@ export default function TaskQueue({
                   onDragEnd={handleDragEnd}
                   className={`flex items-center gap-3 p-3 rounded-xl border mb-2 select-none
                     ${isDragging 
-                      ? "opacity-30 border-primary bg-primary/10 z-0" 
-                      : "border-border bg-card/50 hover:bg-card cursor-grab active:cursor-grabbing z-10"
+                      ? "opacity-50 border-primary bg-primary/10 shadow-lg" 
+                      : "border-border bg-card/50 hover:bg-card cursor-grab active:cursor-grabbing"
                     }
                   `}
-                  style={{
-                    transform: transform,
-                    transition: (draggedIndex !== null && !isReordering) ? "transform 150ms ease" : "none",
-                  }}
                   data-testid={`queue-task-${task.id}`}
                 >
                   {/* Drag Handle */}
