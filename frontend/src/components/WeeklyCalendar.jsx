@@ -483,9 +483,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                       style={{ height: `${SLOT_HEIGHT}px` }}
                     >
                       {slotTasks.map((task) => {
-                        const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
-                        // Debug: log task priority and color
-                        console.log(`Task "${task.title}" priority=${task.priority} colors=${colors}`);
+                        const priorityStyle = PRIORITY_STYLES[task.priority] || PRIORITY_STYLES[2];
                         const duration = task.duration || 30;
                         const slots = duration / 30;
                         const taskHeight = slots * SLOT_HEIGHT - 4;
@@ -505,13 +503,14 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}
                             onClick={(e) => handleTaskClick(e, task)}
-                            className={`group absolute rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors} z-10 transition-opacity ${isDragging ? 'opacity-30' : ''}`}
+                            className={`group absolute rounded text-xs font-medium cursor-grab active:cursor-grabbing z-10 transition-opacity ${isDragging ? 'opacity-30' : ''}`}
                             style={{ 
                               height: `${taskHeight}px`, 
                               top: '2px', 
                               overflow: 'hidden',
                               width: width,
-                              left: left
+                              left: left,
+                              ...priorityStyle
                             }}
                           >
                             <div className="p-1.5 h-full flex flex-col overflow-hidden">
