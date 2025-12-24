@@ -304,6 +304,9 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                     const duration = task.duration || 30;
                     const slots = duration / 30;
                     const taskHeight = slots * SLOT_HEIGHT - 4;
+                    const { index, total } = getTaskPosition(task);
+                    const width = `calc((100% - 4px) / ${total})`;
+                    const left = `calc(2px + (100% - 4px) * ${index} / ${total})`;
 
                     return (
                       <div
@@ -313,8 +316,14 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                         onDragStart={(e) => handleDragStart(e, task)}
                         onDragEnd={handleDragEnd}
                         onClick={(e) => handleTaskClick(e, task)}
-                        className={`group absolute left-0.5 right-0.5 rounded font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
-                        style={{ height: `${taskHeight}px`, top: '2px', overflow: 'hidden' }}
+                        className={`group absolute rounded font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
+                        style={{ 
+                          height: `${taskHeight}px`, 
+                          top: '2px', 
+                          overflow: 'hidden',
+                          width: width,
+                          left: left
+                        }}
                       >
                         <div className="p-2 h-full flex flex-col overflow-hidden">
                           <div className="flex items-center justify-between overflow-hidden">
