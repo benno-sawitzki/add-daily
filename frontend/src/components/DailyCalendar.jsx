@@ -1,22 +1,47 @@
-import { useState, useMemo } from "react";
-import { Card } from "@/components/ui/card";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, Clock } from "lucide-react";
-import { format, addDays, subDays, isToday, isSameDay } from "date-fns";
-import { motion, AnimatePresence } from "framer-motion";
+import { ChevronLeft, ChevronRight, CheckCircle2, Trash2 } from "lucide-react";
+import { format, addDays, subDays, isToday } from "date-fns";
+import TaskEditDialog from "./TaskEditDialog";
 
 const PRIORITY_COLORS = {
-  4: "border-l-rose-500 bg-rose-500/10",
-  3: "border-l-amber-500 bg-amber-500/10",
-  2: "border-l-primary bg-primary/10",
-  1: "border-l-muted-foreground bg-muted/50",
+  4: "bg-rose-500 text-white",
+  3: "bg-amber-500 text-white",
+  2: "bg-indigo-500 text-white",
+  1: "bg-slate-500 text-white",
 };
 
-const HOURS = Array.from({ length: 24 }, (_, i) => i);
+// Generate time slots from 6 AM to 10 PM in 30-min intervals
+const TIME_SLOTS = [];
+for (let hour = 6; hour <= 22; hour++) {
+  TIME_SLOTS.push(`${hour.toString().padStart(2, "0")}:00`);
+  TIME_SLOTS.push(`${hour.toString().padStart(2, "0")}:30`);
+}
 
 export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [dropTarget, setDropTarget] = useState(null);
+  const [editingTask, setEditingTask] = useState(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
+  const timeLineRef = useRef(null);
+  const dragTaskRef = useRef(null);
+
   const dateStr = format(currentDate, "yyyy-MM-dd");
+
+  // Update current time every minute
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Scroll to current time on mount
+  useEffect(() => {
+    if (timeLineRef.current && isToday(currentDate)) {
+      timeLineRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [currentDate]);
 
   const dayTasks = tasks.filter(
     (t) => t.scheduled_date === dateStr && (t.status === "scheduled" || t.status === "inbox")
@@ -26,45 +51,100 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     (t) => t.scheduled_date === dateStr && t.status === "completed"
   );
 
-  const getTasksForHour = (hour) => {
-    return dayTasks.filter((t) => {
-      if (!t.scheduled_time) return hour === 9; // Default to 9 AM
-      const taskHour = parseInt(t.scheduled_time.split(":")[0], 10);
-      return taskHour === hour;
-    });
+  const getTasksForSlot = (time) => {
+    return dayTasks.filter((t) => t.scheduled_time === time);
   };
 
-  const handleComplete = (taskId) => {
+  // Calculate current time position
+  const getCurrentTimePosition = () => {
+    const hours = currentTime.getHours();
+    const minutes = currentTime.getMinutes();
+    // Each slot is 32px height, 2 slots per hour
+    // Starting from 6 AM
+    if (hours < 6 || hours > 22) return null;
+    const slotIndex = (hours - 6) * 2 + (minutes >= 30 ? 1 : 0);
+    const minuteOffset = (minutes % 30) / 30 * 32;
+    return slotIndex * 32 + minuteOffset;
+  };
+
+  const handleDragStart = (e, task) => {
+    dragTaskRef.current = task;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("taskId", task.id);
+  };
+
+  const handleDragEnd = () => {
+    dragTaskRef.current = null;
+    setDropTarget(null);
+  };
+
+  const handleDragOver = (e, time) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropTarget(time);
+  };
+
+  const handleDragLeave = () => {
+    setDropTarget(null);
+  };
+
+  const handleDrop = (e, time) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData("taskId");
+    
+    if (taskId) {
+      onUpdateTask(taskId, {
+        scheduled_date: dateStr,
+        scheduled_time: time,
+        status: "scheduled",
+      });
+    }
+    
+    dragTaskRef.current = null;
+    setDropTarget(null);
+  };
+
+  const handleComplete = (e, taskId) => {
+    e.stopPropagation();
+    e.preventDefault();
     onUpdateTask(taskId, { status: "completed" });
   };
 
-  const handleSetTime = (taskId, hour) => {
-    const timeStr = `${hour.toString().padStart(2, "0")}:00`;
-    onUpdateTask(taskId, { scheduled_time: timeStr });
+  const handleDelete = (e, taskId) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onDeleteTask(taskId);
   };
+
+  const handleTaskClick = (e, task) => {
+    if (!dragTaskRef.current) {
+      e.stopPropagation();
+      setEditingTask(task);
+    }
+  };
+
+  const timePosition = isToday(currentDate) ? getCurrentTimePosition() : null;
 
   return (
     <div className="space-y-4" data-testid="daily-calendar">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-semibold">Daily View</h2>
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setCurrentDate(subDays(currentDate, 1))}
-            data-testid="prev-day"
           >
             <ChevronLeft className="w-5 h-5" />
           </Button>
-          <span className="text-sm font-medium min-w-[180px] text-center">
+          <span className="text-sm font-medium min-w-[200px] text-center">
             {format(currentDate, "EEEE, MMMM d, yyyy")}
           </span>
           <Button
             variant="ghost"
             size="icon"
             onClick={() => setCurrentDate(addDays(currentDate, 1))}
-            data-testid="next-day"
           >
             <ChevronRight className="w-5 h-5" />
           </Button>
@@ -73,101 +153,124 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             size="sm"
             onClick={() => setCurrentDate(new Date())}
             className="ml-2"
-            data-testid="today-btn-daily"
           >
             Today
           </Button>
         </div>
       </div>
 
-      {/* Day indicator */}
+      {/* Today indicator */}
       {isToday(currentDate) && (
-        <div className="flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-lg mb-4">
-          <div className="w-2 h-2 rounded-full bg-primary animate-pulse"></div>
-          <span className="text-sm text-primary font-medium">Today</span>
+        <div className="flex items-center gap-2 px-4 py-2 bg-cyan-500/10 border border-cyan-500/30 rounded-lg">
+          <div className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse"></div>
+          <span className="text-sm text-cyan-400 font-medium">
+            Today · {format(currentTime, "h:mm a")}
+          </span>
         </div>
       )}
 
-      {/* Timeline */}
-      <div className="grid grid-cols-1 lg:grid-cols-[80px_1fr] gap-0">
-        {HOURS.slice(6, 22).map((hour) => {
-          const hourTasks = getTasksForHour(hour);
-          const currentHour = new Date().getHours();
-          const isCurrentHour = isToday(currentDate) && hour === currentHour;
-
-          return (
-            <div key={hour} className="contents">
-              {/* Time label */}
-              <div className={`py-3 pr-4 text-right ${isCurrentHour ? "text-primary" : "text-muted-foreground"}`}>
-                <span className="text-xs font-medium">
-                  {format(new Date().setHours(hour, 0), "h a")}
-                </span>
-              </div>
-
-              {/* Time slot */}
-              <div
-                className={`min-h-[60px] border-t border-border/30 py-2 pl-4 ${isCurrentHour ? "bg-primary/5 border-l-2 border-l-primary" : ""}`}
-                data-testid={`hour-slot-${hour}`}
-              >
-                <AnimatePresence mode="popLayout">
-                  {hourTasks.map((task) => (
-                    <motion.div
-                      key={task.id}
-                      initial={{ opacity: 0, x: -10 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: 10 }}
-                      className={`group p-3 rounded-lg border-l-2 mb-2 ${PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2]}`}
-                      data-testid={`daily-task-${task.id}`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1">
-                          <p className="font-medium">{task.title}</p>
-                          {task.description && (
-                            <p className="text-sm text-muted-foreground mt-1 line-clamp-1">
-                              {task.description}
-                            </p>
-                          )}
-                        </div>
-                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-emerald-500"
-                            onClick={() => handleComplete(task.id)}
-                          >
-                            <CheckCircle2 className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-destructive"
-                            onClick={() => onDeleteTask(task.id)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
+      {/* Time Grid */}
+      <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20">
+        <div className="max-h-[500px] overflow-y-auto relative">
+          {/* Current time line */}
+          {timePosition !== null && (
+            <div
+              ref={timeLineRef}
+              className="absolute left-0 right-0 z-20 pointer-events-none"
+              style={{ top: `${timePosition}px` }}
+            >
+              <div className="flex items-center">
+                <div className="w-16 flex justify-end pr-2">
+                  <span className="text-xs font-bold text-cyan-400 bg-cyan-500/20 px-1.5 py-0.5 rounded">
+                    {format(currentTime, "h:mm")}
+                  </span>
+                </div>
+                <div className="flex-1 flex items-center">
+                  <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)]"></div>
+                  <div className="flex-1 h-0.5 bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)]"></div>
+                </div>
               </div>
             </div>
-          );
-        })}
+          )}
+
+          {TIME_SLOTS.map((time) => {
+            const isHourMark = time.endsWith(":00");
+            const [hours] = time.split(":").map(Number);
+            const slotTasks = getTasksForSlot(time);
+            const isDropHere = dropTarget === time;
+
+            return (
+              <div
+                key={time}
+                className={`grid grid-cols-[70px_1fr] ${isHourMark ? "border-t border-border/40" : ""}`}
+              >
+                {/* Time Label */}
+                <div className="py-2 px-2 text-right border-r border-border/20">
+                  {isHourMark && (
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {format(new Date().setHours(hours, 0), "h:mm a")}
+                    </span>
+                  )}
+                </div>
+
+                {/* Time Slot */}
+                <div
+                  onDragOver={(e) => handleDragOver(e, time)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, time)}
+                  className={`min-h-[32px] border-b border-border/10 p-0.5
+                    ${isDropHere ? "bg-primary/30 ring-2 ring-inset ring-primary" : ""}
+                  `}
+                >
+                  {slotTasks.map((task) => {
+                    const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+
+                    return (
+                      <div
+                        key={task.id}
+                        draggable
+                        onDragStart={(e) => handleDragStart(e, task)}
+                        onDragEnd={handleDragEnd}
+                        onClick={(e) => handleTaskClick(e, task)}
+                        className={`group flex items-center justify-between px-3 py-1.5 rounded text-sm font-medium cursor-grab active:cursor-grabbing ${colors}`}
+                      >
+                        <span className="truncate">{task.title}</span>
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 flex-shrink-0 ml-2">
+                          <button
+                            onClick={(e) => handleComplete(e, task.id)}
+                            className="p-1 hover:bg-white/30 rounded"
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => handleDelete(e, task.id)}
+                            className="p-1 hover:bg-white/30 rounded"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Completed tasks */}
       {completedTasks.length > 0 && (
-        <div className="mt-8">
-          <h3 className="text-lg font-medium text-muted-foreground mb-4 flex items-center gap-2">
+        <div className="mt-6">
+          <h3 className="text-lg font-medium text-muted-foreground mb-3 flex items-center gap-2">
             <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-            Completed Today ({completedTasks.length})
+            Completed ({completedTasks.length})
           </h3>
           <div className="space-y-2">
             {completedTasks.map((task) => (
               <div
                 key={task.id}
-                className="p-3 rounded-lg bg-card/30 opacity-60 line-through"
+                className="p-3 rounded-lg bg-card/30 opacity-60 line-through text-sm"
               >
                 {task.title}
               </div>
@@ -175,6 +278,15 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
           </div>
         </div>
       )}
+
+      {/* Edit Dialog */}
+      <TaskEditDialog
+        task={editingTask}
+        open={!!editingTask}
+        onOpenChange={(open) => !open && setEditingTask(null)}
+        onSave={onUpdateTask}
+        onDelete={onDeleteTask}
+      />
     </div>
   );
 }
