@@ -78,6 +78,13 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
     onOpenChange(false);
   };
 
+  const handleKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      handleSave();
+    }
+  };
+
   const handleDelete = () => {
     onDelete(task.id);
     onOpenChange(false);
