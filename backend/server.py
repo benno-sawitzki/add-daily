@@ -11,20 +11,28 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict, EmailStr
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone, timedelta
-from emergentintegrations.llm.chat import LlmChat, UserMessage
-from emergentintegrations.llm.openai import OpenAISpeechToText
+from datetime import datetime, timezone, timedelta, date
+from llm.openai_client import generate_json, get_model_for_provider
+from llm.openai_audio import transcribe_audio_file
 import json
+import re
 import tempfile
 import requests
-from google.oauth2.credentials import Credentials
-from google.auth.transport.requests import Request as GoogleRequest
-from googleapiclient.discovery import build
 import jwt
 from passlib.context import CryptContext
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+
+# Load .env file only in development (when ENV is not set to 'production')
+# This is a safe default - production should set env vars directly
+ENV = os.environ.get('ENV', 'development')
+if ENV != 'production':
+    env_path = ROOT_DIR / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"✓ Loaded environment variables from {env_path}")
+    else:
+        print(f"⚠ .env file not found at {env_path}. Using system environment variables.")
 
 # Google OAuth Config
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
@@ -34,6 +42,7 @@ GOOGLE_REDIRECT_URI = f"{FRONTEND_URL}/gcal"
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']
 
 # PostgreSQL connection (Supabase)
+# DATABASE_URL will be validated in validate_required_env_vars() below
 DATABASE_URL = os.environ.get('DATABASE_URL')
 db_pool = None
 
@@ -52,8 +61,13 @@ async def get_db_pool():
         )
     return db_pool
 
-# Create the main app with docs at /api/docs
-app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")
+# Create the main app with docs enabled in development, disabled in production
+# In development: docs at /api/docs, openapi at /api/openapi.json
+# In production: docs disabled for security
+if ENV == 'production':
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+else:
+    app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -64,6 +78,34 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# ============ VALIDATE REQUIRED ENVIRONMENT VARIABLES ============
+def validate_required_env_vars():
+    """Validate that all required environment variables are set at startup."""
+    required_vars = {
+        'DATABASE_URL': 'PostgreSQL connection string (e.g., postgresql://user:password@host:port/database)',
+        'OPENAI_API_KEY': 'OpenAI API key for task extraction and transcription (get from https://platform.openai.com/api-keys)',
+    }
+    
+    missing_vars = []
+    for var_name, description in required_vars.items():
+        if not os.environ.get(var_name):
+            missing_vars.append(f"  - {var_name}: {description}")
+    
+    if missing_vars:
+        error_msg = (
+            "\n" + "="*80 + "\n"
+            "ERROR: Missing required environment variables:\n"
+            + "\n".join(missing_vars) + "\n\n"
+            "Please set these in your .env file (backend/.env) or as environment variables.\n"
+            "Copy backend/.env.example to backend/.env and fill in the values.\n"
+            "="*80 + "\n"
+        )
+        logger.error(error_msg)
+        raise ValueError(error_msg)
+
+# Validate required environment variables at startup
+validate_required_env_vars()
 
 # ============ AUTH CONFIG ============
 JWT_SECRET = os.environ.get('JWT_SECRET', 'add-daily-secret-key-change-in-production')
@@ -222,71 +264,175 @@ class SettingsUpdate(BaseModel):
     ai_provider: str
     ai_model: str
 
+def transform_task_to_frontend_format(task_data: dict) -> dict:
+    """
+    Transform task from new schema (title, due_date, notes, priority) 
+    to frontend-expected format (title, description, urgency, importance, priority, duration).
+    
+    Args:
+        task_data: Task with new schema fields
+    
+    Returns:
+        Task in frontend format
+    """
+    # Map priority string to numeric values
+    priority_map = {
+        "high": 4,
+        "medium": 2,
+        "low": 1,
+        None: 2,  # Default to medium if null
+    }
+    
+    priority_str = task_data.get("priority", "medium")
+    if priority_str not in priority_map:
+        priority_str = "medium"
+    
+    priority_num = priority_map[priority_str]
+    
+    # Calculate urgency and importance from priority
+    # High priority (4) = high urgency (4) + high importance (4)
+    # Medium priority (2) = medium urgency (2) + medium importance (2)
+    # Low priority (1) = low urgency (1) + low importance (1)
+    urgency = priority_num
+    importance = priority_num
+    
+    # Extract duration from notes if mentioned, otherwise default to 30
+    duration = 30
+    notes = task_data.get("notes", "") or ""
+    notes_lower = notes.lower()
+    
+    # Look for duration mentions in notes
+    import re
+    duration_patterns = [
+        (r"(\d+)\s*hours?", lambda m: int(m.group(1)) * 60),
+        (r"(\d+)\s*hrs?", lambda m: int(m.group(1)) * 60),
+        (r"(\d+)\s*h", lambda m: int(m.group(1)) * 60),
+        (r"(\d+)\s*minutes?", lambda m: int(m.group(1))),
+        (r"(\d+)\s*mins?", lambda m: int(m.group(1))),
+        (r"half\s*an?\s*hour", lambda m: 30),
+        (r"quarter\s*hour", lambda m: 15),
+    ]
+    
+    for pattern, converter in duration_patterns:
+        match = re.search(pattern, notes_lower)
+        if match:
+            duration = converter(match)
+            break
+    
+    return {
+        "title": task_data.get("title", "Untitled Task"),
+        "description": notes or "",  # Use notes as description
+        "urgency": urgency,
+        "importance": importance,
+        "priority": priority_num,
+        "duration": duration,
+    }
+
+
 # Helper function to get AI response
 async def get_ai_response(transcript: str, provider: str, model: str) -> dict:
-    api_key = os.environ.get('EMERGENT_LLM_KEY')
+    """
+    Extract tasks from transcript using AI with strict JSON schema.
+    
+    Returns tasks in the format expected by the frontend.
+    """
+    api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
-        raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
     
-    system_message = """You are a task extraction and prioritization AI. Extract tasks from user's voice input.
-    
-For each task, determine:
-- title: A clear, concise task title (remove any duration mentions from the title)
-- description: Additional details if provided
-- urgency: 1-4 scale (1=not urgent, 4=extremely urgent)
-- importance: 1-4 scale (1=not important, 4=very important)
-- priority: Calculate as (urgency + importance) / 2, round to nearest integer
-- duration: Duration in MINUTES. Listen for phrases like:
-  - "for an hour" or "one hour" or "1 hour" = 60
-  - "30 minutes" or "half an hour" = 30
-  - "2 hours" or "two hours" = 120
-  - "15 minutes" or "quarter hour" = 15
-  - "should take about X" or "takes X" = extract X
-  - If no duration mentioned, use null
+    system_message = """You are a task extraction AI. Extract tasks from user's voice input.
 
-Respond ONLY with a JSON object in this exact format:
+For each task, determine:
+- title: A clear, concise task title
+- due_date: Date in YYYY-MM-DD format if mentioned, otherwise null
+- notes: Additional details, context, or notes about the task (can be null)
+- priority: One of "low", "medium", "high", or null if not specified
+
+Respond ONLY with a JSON object in this exact format (no markdown, no code blocks):
 {
   "tasks": [
     {
       "title": "string",
-      "description": "string",
-      "urgency": number,
-      "importance": number,
-      "priority": number,
-      "duration": number or null
+      "due_date": "string or null",
+      "notes": "string or null",
+      "priority": "low" | "medium" | "high" | null
     }
   ],
   "summary": "Brief summary of what was extracted"
 }
 
-If no tasks can be extracted, return {"tasks": [], "summary": "No tasks found"}"""
+If no tasks can be extracted, return {"tasks": [], "summary": "No tasks found"}
+
+IMPORTANT: Return ONLY valid JSON. Do not wrap in markdown code blocks."""
     
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=str(uuid.uuid4()),
-        system_message=system_message
-    )
+    # Map provider/model to OpenAI model
+    openai_model = get_model_for_provider(provider, model)
     
-    chat.with_model(provider, model)
+    user_prompt = f"Extract and prioritize tasks from this voice input: {transcript}"
     
-    user_message = UserMessage(text=f"Extract and prioritize tasks from this voice input: {transcript}")
-    response = await chat.send_message(user_message)
-    
-    # Parse JSON from response
     try:
-        # Try to extract JSON from the response
-        response_text = response.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.startswith("```"):
-            response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
+        # Get response from AI with strict JSON
+        raw_result = await generate_json(
+            system_prompt=system_message,
+            user_prompt=user_prompt,
+            model=openai_model,
+            temperature=0.7
+        )
         
-        return json.loads(response_text.strip())
-    except json.JSONDecodeError:
-        logger.error(f"Failed to parse AI response: {response}")
-        return {"tasks": [], "summary": "Failed to parse response"}
+        # Validate and transform tasks
+        if not isinstance(raw_result, dict):
+            logger.error(f"AI response is not a dict: {type(raw_result)}")
+            raise HTTPException(
+                status_code=500, 
+                detail="AI returned invalid response format"
+            )
+        
+        tasks = raw_result.get("tasks", [])
+        if not isinstance(tasks, list):
+            logger.error(f"Tasks field is not a list: {type(tasks)}")
+            raise HTTPException(
+                status_code=500,
+                detail="AI returned invalid tasks format"
+            )
+        
+        # Transform each task to frontend format
+        transformed_tasks = []
+        for task_data in tasks:
+            if not isinstance(task_data, dict):
+                logger.warning(f"Skipping invalid task (not a dict): {task_data}")
+                continue
+            
+            try:
+                transformed = transform_task_to_frontend_format(task_data)
+                transformed_tasks.append(transformed)
+            except Exception as e:
+                logger.warning(f"Error transforming task {task_data}: {e}")
+                continue
+        
+        return {
+            "tasks": transformed_tasks,
+            "summary": raw_result.get("summary", "Tasks extracted")
+        }
+        
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing failed in get_ai_response: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to parse AI response as JSON. Please try again or rephrase your input."
+        )
+    except ValueError as e:
+        logger.error(f"Value error in get_ai_response: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to get AI response: {str(e)}")
+        # Check for rate limit / quota errors
+        error_str = str(e).lower()
+        if any(keyword in error_str for keyword in ["rate", "limit", "quota", "insufficient", "billing", "payment"]):
+            raise HTTPException(
+                status_code=429,
+                detail="QUOTA_EXCEEDED: Your OpenAI API quota has been exceeded. Please add credits to your OpenAI account at https://platform.openai.com/account/billing"
+            )
+        raise HTTPException(status_code=500, detail=f"AI processing failed: {str(e)}")
 
 # Routes
 @api_router.get("/")
@@ -514,27 +660,59 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
     
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        # Build dynamic update query
+        # Build dynamic update query with proper parameterization
+        # Only allow updating specific fields that exist in the database
+        allowed_fields = {'title', 'description', 'priority', 'urgency', 'importance', 
+                         'scheduled_date', 'scheduled_time', 'duration', 'status'}
+        filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields}
+        
+        if not filtered_data:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
         set_clauses = []
         values = []
-        for i, (key, value) in enumerate(update_data.items(), start=1):
-            set_clauses.append(f"{key} = ${i}")
+        param_num = 1
+        for key, value in filtered_data.items():
+            set_clauses.append(f"{key} = ${param_num}")
+            # Convert date strings to date objects for asyncpg
+            if key == 'scheduled_date' and isinstance(value, str):
+                try:
+                    # Parse YYYY-MM-DD format string to date object
+                    value = datetime.strptime(value, "%Y-%m-%d").date()
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid date format for scheduled_date: {value}. Expected YYYY-MM-DD")
             values.append(value)
+            param_num += 1
+        
+        # Add task_id and user_id as final parameters
+        where_clause = f"id = ${param_num} AND user_id = ${param_num + 1}"
         values.extend([task_id, user["id"]])
         
-        query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE id = ${len(values)-1} AND user_id = ${len(values)}"
-        result = await conn.execute(query, *values)
+        query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE {where_clause}"
         
-        if result == "UPDATE 0":
-            raise HTTPException(status_code=404, detail="Task not found")
-        
-        row = await conn.fetchrow(
-            """SELECT id, user_id, title, description, priority, urgency, importance, 
-               scheduled_date::text, scheduled_time, duration, status, created_at::text
-               FROM tasks WHERE id = $1""",
-            task_id
-        )
-    return dict(row)
+        try:
+            logger.info(f"Updating task {task_id} with {len(filtered_data)} fields")
+            result = await conn.execute(query, *values)
+            
+            if result == "UPDATE 0":
+                raise HTTPException(status_code=404, detail="Task not found or you don't have permission")
+            
+            row = await conn.fetchrow(
+                """SELECT id, user_id, title, description, priority, urgency, importance, 
+                   scheduled_date::text, scheduled_time, duration, status, created_at::text
+                   FROM tasks WHERE id = $1 AND user_id = $2""",
+                task_id, user["id"]
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="Task not found after update")
+            return dict(row)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error updating task {task_id}: {str(e)}", exc_info=True)
+            logger.error(f"Query was: {query}")
+            logger.error(f"Values were: {values}")
+            raise HTTPException(status_code=500, detail=f"Failed to update task: {str(e)}")
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
@@ -556,12 +734,14 @@ async def process_voice_queue(voice_input: VoiceInput, user: dict = Depends(get_
             voice_input.model
         )
         
-        # Create task objects but don't save them yet
+        # get_ai_response already returns tasks in frontend format
+        # Just add id and order fields for the queue
         tasks_for_review = []
         for i, task_data in enumerate(result.get("tasks", [])):
-            # Use AI-extracted duration if available, otherwise default to 30 minutes
-            ai_duration = task_data.get("duration")
-            duration = ai_duration if ai_duration and isinstance(ai_duration, (int, float)) and ai_duration > 0 else 30
+            # Ensure duration is valid
+            duration = task_data.get("duration", 30)
+            if not isinstance(duration, (int, float)) or duration <= 0:
+                duration = 30
             
             task = {
                 "id": str(uuid.uuid4()),
@@ -570,7 +750,7 @@ async def process_voice_queue(voice_input: VoiceInput, user: dict = Depends(get_
                 "urgency": task_data.get("urgency", 2),
                 "importance": task_data.get("importance", 2),
                 "priority": task_data.get("priority", 2),
-                "duration": int(duration),  # AI-extracted or default 30 minutes
+                "duration": int(duration),
                 "order": i,
             }
             tasks_for_review.append(task)
@@ -583,6 +763,9 @@ async def process_voice_queue(voice_input: VoiceInput, user: dict = Depends(get_
             "tasks": tasks_for_review,
             "summary": result.get("summary", "Tasks extracted")
         }
+    except HTTPException:
+        # Re-raise HTTP exceptions (already properly formatted)
+        raise
     except Exception as e:
         logger.error(f"Error processing voice: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -645,63 +828,86 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
             tasks_by_date[date].append(task_data)
         
         created_tasks = []
+        pool = await get_db_pool()
         
-        for date, date_tasks in tasks_by_date.items():
-            # Start scheduling 1 hour from now for today, 9 AM for other days
-            if date == today:
-                current_hour = now.hour + 1
-            else:
-                current_hour = 9
-            current_minute = 0
-            
-            for task_data in date_tasks:
-                # Wrap to next day if past 10 PM
-                if current_hour >= 22:
+        async with pool.acquire() as conn:
+            for date, date_tasks in tasks_by_date.items():
+                # Start scheduling 1 hour from now for today, 9 AM for other days
+                if date == today:
+                    current_hour = now.hour + 1
+                else:
                     current_hour = 9
-                    current_minute = 0
+                current_minute = 0
                 
-                scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
-                
-                task = Task(
-                    id=task_data.get("id", str(uuid.uuid4())),
-                    user_id=user["id"],
-                    title=task_data.get("title", "Untitled Task"),
-                    description=task_data.get("description", ""),
-                    urgency=task_data.get("urgency", 2),
-                    importance=task_data.get("importance", 2),
-                    priority=task_data.get("priority", 2),
-                    duration=task_data.get("duration", 30),
-                    scheduled_date=date,
-                    scheduled_time=scheduled_time,
-                    status="scheduled"
-                )
-                
-                pool = await get_db_pool()
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-                           scheduled_date, scheduled_time, duration, status, created_at)
-                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
-                        task.id, user["id"], task.title, task.description, task.priority, task.urgency, task.importance,
-                        date, scheduled_time, task.duration, task.status, datetime.now(timezone.utc)
-                    )
-                created_tasks.append(task)
-                
-                # Advance time by task duration
-                duration = task_data.get("duration", 30)
-                current_minute += duration
-                while current_minute >= 60:
-                    current_minute -= 60
-                    current_hour += 1
+                for task_data in date_tasks:
+                    # Wrap to next day if past 10 PM
+                    if current_hour >= 22:
+                        current_hour = 9
+                        current_minute = 0
+                    
+                    scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
+                    
+                    # Ensure all required fields have defaults
+                    task_id = task_data.get("id") or str(uuid.uuid4())
+                    title = task_data.get("title") or "Untitled Task"
+                    description = task_data.get("description") or ""
+                    urgency = task_data.get("urgency", 2)
+                    importance = task_data.get("importance", 2)
+                    priority = task_data.get("priority", 2)
+                    duration = task_data.get("duration", 30)
+                    
+                    # Validate priority, urgency, importance are in valid range
+                    priority = max(1, min(4, priority))
+                    urgency = max(1, min(4, urgency))
+                    importance = max(1, min(4, importance))
+                    
+                    created_at = datetime.now(timezone.utc)
+                    
+                    try:
+                        await conn.execute(
+                            """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
+                               scheduled_date, scheduled_time, duration, status, created_at)
+                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                            task_id, user["id"], title, description, priority, urgency, importance,
+                            date, scheduled_time, duration, "scheduled", created_at
+                        )
+                        
+                        created_tasks.append({
+                            "id": task_id,
+                            "title": title,
+                            "description": description,
+                            "priority": priority,
+                            "urgency": urgency,
+                            "importance": importance,
+                            "scheduled_date": date,
+                            "scheduled_time": scheduled_time,
+                            "duration": duration,
+                            "status": "scheduled"
+                        })
+                    except Exception as db_error:
+                        logger.error(f"Database error inserting task {task_id}: {str(db_error)}")
+                        raise HTTPException(
+                            status_code=500,
+                            detail=f"Failed to save task '{title}': {str(db_error)}"
+                        )
+                    
+                    # Advance time by task duration
+                    current_minute += duration
+                    while current_minute >= 60:
+                        current_minute -= 60
+                        current_hour += 1
         
         return {
             "success": True,
-            "tasks": [t.model_dump() for t in created_tasks],
+            "tasks": created_tasks,
             "message": f"{len(created_tasks)} tasks scheduled"
         }
+    except HTTPException:
+        # Re-raise HTTP exceptions (already properly formatted)
+        raise
     except Exception as e:
-        logger.error(f"Error pushing to calendar: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error pushing to calendar: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to push tasks to calendar: {str(e)}")
 
 
 # Voice processing (legacy - disabled, use /tasks/process-voice-queue instead)
@@ -739,12 +945,13 @@ async def update_settings(settings_update: SettingsUpdate, user: dict = Depends(
 
 # Whisper Speech-to-Text endpoint
 @api_router.post("/transcribe")
-async def transcribe_audio(audio: UploadFile = File(...), user: dict = Depends(get_current_user)):
+async def transcribe_audio_endpoint(audio: UploadFile = File(...), user: dict = Depends(get_current_user)):
     """Transcribe audio using OpenAI Whisper"""
-    api_key = os.environ.get('EMERGENT_LLM_KEY')
+    api_key = os.environ.get('OPENAI_API_KEY')
     if not api_key:
-        raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
     
+    tmp_path = None
     try:
         # Save uploaded file to temp location
         suffix = Path(audio.filename).suffix if audio.filename else ".webm"
@@ -753,26 +960,23 @@ async def transcribe_audio(audio: UploadFile = File(...), user: dict = Depends(g
             tmp.write(content)
             tmp_path = tmp.name
         
-        # Transcribe using Whisper
-        stt = OpenAISpeechToText(api_key=api_key)
-        
-        with open(tmp_path, "rb") as audio_file:
-            response = await stt.transcribe(
-                file=audio_file,
-                model="whisper-1",
-                response_format="json",
-                language="en"
-            )
+        # Transcribe using OpenAI Whisper
+        transcript_text = await transcribe_audio_file(
+            audio_file_path=tmp_path,
+            model="whisper-1",
+            language="en"
+        )
         
         # Clean up temp file
         os.unlink(tmp_path)
+        tmp_path = None
         
-        return {"success": True, "transcript": response.text}
+        return {"success": True, "transcript": transcript_text}
         
     except Exception as e:
         logger.error(f"Whisper transcription error: {str(e)}")
         # Clean up temp file on error
-        if 'tmp_path' in locals():
+        if tmp_path:
             try:
                 os.unlink(tmp_path)
             except:
@@ -783,7 +987,7 @@ async def transcribe_audio(audio: UploadFile = File(...), user: dict = Depends(g
         if "rate" in error_str and "limit" in error_str or "quota" in error_str:
             raise HTTPException(
                 status_code=429, 
-                detail="QUOTA_EXCEEDED: Your API quota has been exceeded. Please add credits to your Emergent LLM Key (Profile → Universal Key → Add Balance)."
+                detail="QUOTA_EXCEEDED: Your OpenAI API quota has been exceeded. Please add credits to your OpenAI account."
             )
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
@@ -948,13 +1152,28 @@ async def google_callback_root(code: str = Query(None)):
     """Handle Google OAuth callback - DISABLED"""
     return RedirectResponse(f"{FRONTEND_URL}?google_error=Google Calendar sync is currently disabled")
 
+# CORS configuration
+cors_origins_str = os.environ.get('CORS_ORIGINS', '*')
+if cors_origins_str == '*':
+    cors_origins = ['*']
+else:
+    cors_origins = [origin.strip() for origin in cors_origins_str.split(',')]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Root redirect to API docs in development
+@app.get("/")
+async def root():
+    """Redirect root to API documentation"""
+    if ENV == 'production':
+        return {"message": "ADD Daily API", "docs": "API documentation is disabled in production"}
+    return RedirectResponse(url="/api/docs")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

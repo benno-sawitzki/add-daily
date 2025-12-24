@@ -431,7 +431,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       console.error("Whisper error:", err);
       // Check for quota exceeded error (429 status or specific message)
       if (err.response?.status === 429 || err.response?.data?.detail?.includes("QUOTA_EXCEEDED")) {
-        setError("⚠️ API quota exceeded. Please add credits to your Emergent LLM Key (Profile → Universal Key → Add Balance). You can still type your tasks manually below.");
+        setError("⚠️ API quota exceeded. Please add credits to your OpenAI account (https://platform.openai.com/account/billing). You can still type your tasks manually below.");
       } else {
         setError("Transcription failed. You can edit the text manually.");
       }

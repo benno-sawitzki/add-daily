@@ -148,7 +148,12 @@ function MainApp() {
       return response.data;
     } catch (error) {
       console.error("Error processing voice:", error);
-      toast.error("Failed to process voice input");
+      // Check for quota exceeded error
+      if (error.response?.status === 429 || error.response?.data?.detail?.includes("QUOTA_EXCEEDED")) {
+        toast.error("API quota exceeded. Please add credits to your OpenAI account at https://platform.openai.com/account/billing");
+      } else {
+        toast.error("Failed to process voice input");
+      }
       throw error;
     } finally {
       setIsLoading(false);
@@ -169,7 +174,8 @@ function MainApp() {
       toast.success(`${queuedTasks.length} tasks scheduled!`);
     } catch (error) {
       console.error("Error pushing to calendar:", error);
-      toast.error("Failed to push tasks to calendar");
+      const errorMessage = error.response?.data?.detail || error.message || "Failed to push tasks to calendar";
+      toast.error(errorMessage);
     }
   };
 
