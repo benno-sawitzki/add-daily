@@ -592,29 +592,29 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
     """Save tasks to inbox (not scheduled)"""
     try:
         created_tasks = []
+        pool = await get_db_pool()
         
-        for task_data in request.tasks:
-            task = Task(
-                id=task_data.get("id", str(uuid.uuid4())),
-                user_id=user["id"],
-                title=task_data.get("title", "Untitled Task"),
-                description=task_data.get("description", ""),
-                urgency=task_data.get("urgency", 2),
-                importance=task_data.get("importance", 2),
-                priority=task_data.get("priority", 2),
-                duration=task_data.get("duration", 30),
-                scheduled_date=None,
-                scheduled_time=None,
-                status="inbox"
-            )
-            
-            doc = task.model_dump()
-            await db.tasks.insert_one(doc)
-            created_tasks.append(task)
+        async with pool.acquire() as conn:
+            for task_data in request.tasks:
+                task_id = task_data.get("id", str(uuid.uuid4()))
+                await conn.execute(
+                    """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
+                       duration, status, created_at)
+                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
+                    task_id, user["id"], task_data.get("title", "Untitled Task"),
+                    task_data.get("description", ""), task_data.get("priority", 2),
+                    task_data.get("urgency", 2), task_data.get("importance", 2),
+                    task_data.get("duration", 30), "inbox", datetime.now(timezone.utc)
+                )
+                created_tasks.append({
+                    "id": task_id,
+                    "title": task_data.get("title", "Untitled Task"),
+                    "status": "inbox"
+                })
         
         return {
             "success": True,
-            "tasks": [t.model_dump() for t in created_tasks],
+            "tasks": created_tasks,
             "message": f"{len(created_tasks)} tasks added to inbox"
         }
     except Exception as e:
