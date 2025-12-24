@@ -613,6 +613,7 @@ async def google_login():
 
 
 @api_router.get("/auth/google/callback")
+@api_router.get("/gcal")
 async def google_callback(code: str = Query(...)):
     """Handle Google OAuth callback"""
     try:
