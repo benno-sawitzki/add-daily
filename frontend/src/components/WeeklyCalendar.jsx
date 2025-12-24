@@ -1,23 +1,14 @@
-import { useState, useMemo } from "react";
+import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, CheckCircle2, Trash2 } from "lucide-react";
-import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks, parseISO } from "date-fns";
-import {
-  DndContext,
-  DragOverlay,
-  useSensor,
-  useSensors,
-  PointerSensor,
-} from "@dnd-kit/core";
-import { useDraggable, useDroppable } from "@dnd-kit/core";
-import { CSS } from "@dnd-kit/utilities";
-import { motion } from "framer-motion";
+import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, GripVertical } from "lucide-react";
+import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
+import { motion, AnimatePresence } from "framer-motion";
 
 const PRIORITY_COLORS = {
-  4: "bg-rose-500/20 border-l-rose-500 text-rose-100",
-  3: "bg-amber-500/20 border-l-amber-500 text-amber-100",
-  2: "bg-primary/20 border-l-primary text-primary-foreground",
-  1: "bg-muted/30 border-l-muted-foreground text-muted-foreground",
+  4: { bg: "bg-rose-500/90", border: "border-rose-400", text: "text-white" },
+  3: { bg: "bg-amber-500/90", border: "border-amber-400", text: "text-white" },
+  2: { bg: "bg-indigo-500/90", border: "border-indigo-400", text: "text-white" },
+  1: { bg: "bg-slate-500/80", border: "border-slate-400", text: "text-white" },
 };
 
 // Generate time slots from 6 AM to 10 PM in 30-min intervals
@@ -27,143 +18,127 @@ for (let hour = 6; hour <= 22; hour++) {
   TIME_SLOTS.push(`${hour.toString().padStart(2, "0")}:30`);
 }
 
-function DraggableTask({ task, onComplete, onDelete }) {
-  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
-    id: task.id,
-    data: { task },
-  });
-
-  const style = {
-    transform: CSS.Translate.toString(transform),
-    opacity: isDragging ? 0.5 : 1,
-  };
-
-  return (
-    <div
-      ref={setNodeRef}
-      style={style}
-      {...attributes}
-      {...listeners}
-      className={`group p-1.5 rounded border-l-2 cursor-grab active:cursor-grabbing text-xs ${PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2]} hover:ring-1 hover:ring-primary/50 transition-all`}
-      data-testid={`calendar-task-${task.id}`}
-    >
-      <p className="font-medium truncate leading-tight">{task.title}</p>
-      <div className="flex gap-1 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button
-          className="p-0.5 hover:bg-white/10 rounded"
-          onClick={(e) => {
-            e.stopPropagation();
-            onComplete(task.id);
-          }}
-        >
-          <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-        </button>
-        <button
-          className="p-0.5 hover:bg-white/10 rounded"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete(task.id);
-          }}
-        >
-          <Trash2 className="w-3 h-3 text-rose-400" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function TimeSlotCell({ date, time, tasks, onComplete, onDelete }) {
-  const dateStr = format(date, "yyyy-MM-dd");
-  const slotId = `${dateStr}|${time}`;
-  const { setNodeRef, isOver } = useDroppable({ id: slotId });
-
-  // Find tasks for this specific slot
-  const slotTasks = tasks.filter((t) => {
-    if (t.scheduled_date !== dateStr) return false;
-    if (!t.scheduled_time) return false;
-    // Match exact time or within the 30-min slot
-    const taskTime = t.scheduled_time;
-    return taskTime === time || (taskTime > time && taskTime < getNextSlot(time));
-  });
-
-  return (
-    <div
-      ref={setNodeRef}
-      className={`min-h-[40px] border-b border-r border-border/20 p-0.5 transition-colors ${
-        isOver ? "bg-primary/10" : ""
-      }`}
-      data-testid={`slot-${slotId}`}
-    >
-      {slotTasks.map((task) => (
-        <DraggableTask
-          key={task.id}
-          task={task}
-          onComplete={onComplete}
-          onDelete={onDelete}
-        />
-      ))}
-    </div>
-  );
-}
-
-function getNextSlot(time) {
-  const [hours, mins] = time.split(":").map(Number);
-  if (mins === 0) {
-    return `${hours.toString().padStart(2, "0")}:30`;
-  } else {
-    return `${(hours + 1).toString().padStart(2, "0")}:00`;
-  }
-}
-
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [activeTask, setActiveTask] = useState(null);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 5,
-      },
-    })
-  );
+  const [draggedTask, setDraggedTask] = useState(null);
+  const [dragOverSlot, setDragOverSlot] = useState(null);
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const scheduledTasks = tasks.filter((t) => t.status === "scheduled" || t.scheduled_date);
 
-  const handleDragStart = (event) => {
-    const task = event.active.data.current?.task || tasks.find((t) => t.id === event.active.id);
-    setActiveTask(task);
+  const getTasksForSlot = (dateStr, time) => {
+    return scheduledTasks.filter((t) => {
+      if (t.scheduled_date !== dateStr) return false;
+      if (!t.scheduled_time) return false;
+      return t.scheduled_time === time;
+    });
   };
 
-  const handleDragEnd = (event) => {
-    const { active, over } = event;
-    setActiveTask(null);
+  const handleDragStart = (e, task) => {
+    setDraggedTask(task);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", task.id);
+    // Make drag image semi-transparent
+    if (e.target) {
+      e.target.style.opacity = "0.5";
+    }
+  };
 
-    if (!over) return;
+  const handleDragEnd = (e) => {
+    if (e.target) {
+      e.target.style.opacity = "1";
+    }
+    setDraggedTask(null);
+    setDragOverSlot(null);
+  };
 
-    const taskId = active.id;
-    const [newDate, newTime] = over.id.split("|");
+  const handleDragOver = (e, dateStr, time) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const slotId = `${dateStr}|${time}`;
+    if (dragOverSlot !== slotId) {
+      setDragOverSlot(slotId);
+    }
+  };
 
-    if (newDate && newTime) {
+  const handleDragLeave = (e) => {
+    // Only clear if leaving to outside
+    if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
+      setDragOverSlot(null);
+    }
+  };
+
+  const handleDrop = (e, dateStr, time) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData("text/plain");
+    
+    if (taskId) {
       onUpdateTask(taskId, {
-        scheduled_date: newDate,
-        scheduled_time: newTime,
+        scheduled_date: dateStr,
+        scheduled_time: time,
         status: "scheduled",
       });
     }
+    
+    setDraggedTask(null);
+    setDragOverSlot(null);
   };
 
   const handleComplete = (taskId) => {
     onUpdateTask(taskId, { status: "completed" });
   };
 
-  // Get current time indicator position
-  const now = new Date();
-  const currentHour = now.getHours();
-  const currentMinute = now.getMinutes();
-  const isCurrentWeek = weekDays.some((d) => isToday(d));
+  const TaskBlock = ({ task }) => {
+    const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+    const isDragging = draggedTask?.id === task.id;
+
+    return (
+      <motion.div
+        layout
+        initial={{ opacity: 0, scale: 0.8 }}
+        animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.8 }}
+        transition={{ duration: 0.15 }}
+        draggable
+        onDragStart={(e) => handleDragStart(e, task)}
+        onDragEnd={handleDragEnd}
+        className={`group relative px-2 py-1.5 rounded-md cursor-grab active:cursor-grabbing select-none
+          ${colors.bg} ${colors.text} border ${colors.border}
+          shadow-sm hover:shadow-md transition-shadow
+          ${isDragging ? "ring-2 ring-white/50" : ""}`}
+        data-testid={`task-block-${task.id}`}
+      >
+        <div className="flex items-center gap-1">
+          <GripVertical className="w-3 h-3 opacity-50 flex-shrink-0" />
+          <span className="text-xs font-medium truncate flex-1">{task.title}</span>
+        </div>
+        
+        {/* Quick actions on hover */}
+        <div className="absolute -right-1 -top-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleComplete(task.id);
+            }}
+            className="p-1 bg-emerald-500 rounded-full shadow-lg hover:bg-emerald-400 transition-colors"
+          >
+            <CheckCircle2 className="w-3 h-3 text-white" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onDeleteTask(task.id);
+            }}
+            className="p-1 bg-rose-500 rounded-full shadow-lg hover:bg-rose-400 transition-colors"
+          >
+            <Trash2 className="w-3 h-3 text-white" />
+          </button>
+        </div>
+      </motion.div>
+    );
+  };
 
   return (
     <div className="space-y-4" data-testid="weekly-calendar">
@@ -203,92 +178,97 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
       </div>
 
       {/* Calendar Grid */}
-      <DndContext
-        sensors={sensors}
-        onDragStart={handleDragStart}
-        onDragEnd={handleDragEnd}
-      >
-        <div className="border border-border/30 rounded-xl overflow-hidden bg-card/30">
-          {/* Day Headers */}
-          <div className="grid grid-cols-[60px_repeat(7,1fr)] bg-card/50 border-b border-border/30">
-            <div className="p-2 text-xs text-muted-foreground text-center border-r border-border/20">
-              Time
-            </div>
-            {weekDays.map((day) => (
-              <div
-                key={format(day, "yyyy-MM-dd")}
-                className={`p-2 text-center border-r border-border/20 last:border-r-0 ${
-                  isToday(day) ? "bg-primary/10" : ""
-                }`}
-              >
-                <div className={`text-xs ${isToday(day) ? "text-primary" : "text-muted-foreground"}`}>
-                  {format(day, "EEE")}
-                </div>
-                <div className={`text-lg font-semibold ${isToday(day) ? "text-primary" : ""}`}>
-                  {format(day, "d")}
-                </div>
+      <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20 backdrop-blur-sm">
+        {/* Day Headers - Fixed */}
+        <div className="grid grid-cols-[70px_repeat(7,1fr)] bg-card/80 border-b border-border/30 sticky top-0 z-10">
+          <div className="p-3 text-xs font-medium text-muted-foreground text-center border-r border-border/20">
+            
+          </div>
+          {weekDays.map((day) => (
+            <div
+              key={format(day, "yyyy-MM-dd")}
+              className={`p-3 text-center border-r border-border/20 last:border-r-0 transition-colors ${
+                isToday(day) ? "bg-primary/20" : ""
+              }`}
+            >
+              <div className={`text-xs uppercase tracking-wide ${isToday(day) ? "text-primary font-semibold" : "text-muted-foreground"}`}>
+                {format(day, "EEE")}
               </div>
-            ))}
-          </div>
-
-          {/* Time Slots Grid */}
-          <div className="max-h-[600px] overflow-y-auto">
-            {TIME_SLOTS.map((time, timeIndex) => {
-              const isHourMark = time.endsWith(":00");
-              const [hours] = time.split(":").map(Number);
-              
-              return (
-                <div
-                  key={time}
-                  className={`grid grid-cols-[60px_repeat(7,1fr)] ${isHourMark ? "border-t border-border/30" : ""}`}
-                >
-                  {/* Time Label */}
-                  <div className={`p-1 text-xs text-muted-foreground text-right pr-2 border-r border-border/20 ${isHourMark ? "" : "text-transparent"}`}>
-                    {isHourMark ? format(new Date().setHours(hours, 0), "h a") : "00"}
-                  </div>
-
-                  {/* Day Columns */}
-                  {weekDays.map((day) => (
-                    <TimeSlotCell
-                      key={`${format(day, "yyyy-MM-dd")}-${time}`}
-                      date={day}
-                      time={time}
-                      tasks={scheduledTasks}
-                      onComplete={handleComplete}
-                      onDelete={onDeleteTask}
-                    />
-                  ))}
-                </div>
-              );
-            })}
-          </div>
+              <div className={`text-xl font-bold mt-0.5 ${isToday(day) ? "text-primary" : ""}`}>
+                {format(day, "d")}
+              </div>
+            </div>
+          ))}
         </div>
 
-        <DragOverlay>
-          {activeTask && (
-            <div className={`p-2 rounded border-l-2 bg-card shadow-xl text-xs ${PRIORITY_COLORS[activeTask.priority]}`}>
-              <p className="font-medium">{activeTask.title}</p>
-            </div>
-          )}
-        </DragOverlay>
-      </DndContext>
+        {/* Scrollable Time Grid */}
+        <div className="max-h-[550px] overflow-y-auto overflow-x-hidden">
+          {TIME_SLOTS.map((time) => {
+            const isHourMark = time.endsWith(":00");
+            const [hours] = time.split(":").map(Number);
+
+            return (
+              <div
+                key={time}
+                className={`grid grid-cols-[70px_repeat(7,1fr)] ${isHourMark ? "border-t border-border/40" : ""}`}
+              >
+                {/* Time Label */}
+                <div className={`py-2 px-2 text-right border-r border-border/20 ${isHourMark ? "" : ""}`}>
+                  <span className={`text-xs font-medium ${isHourMark ? "text-muted-foreground" : "text-transparent"}`}>
+                    {isHourMark ? format(new Date().setHours(hours, 0), "h:mm a") : "."}
+                  </span>
+                </div>
+
+                {/* Day Cells */}
+                {weekDays.map((day) => {
+                  const dateStr = format(day, "yyyy-MM-dd");
+                  const slotId = `${dateStr}|${time}`;
+                  const slotTasks = getTasksForSlot(dateStr, time);
+                  const isOver = dragOverSlot === slotId;
+
+                  return (
+                    <div
+                      key={slotId}
+                      onDragOver={(e) => handleDragOver(e, dateStr, time)}
+                      onDragLeave={handleDragLeave}
+                      onDrop={(e) => handleDrop(e, dateStr, time)}
+                      className={`min-h-[36px] border-b border-r border-border/10 p-0.5 transition-all duration-100
+                        ${isToday(day) ? "bg-primary/5" : ""}
+                        ${isOver ? "bg-primary/20 ring-2 ring-inset ring-primary/50" : ""}
+                        ${isHourMark ? "border-t border-t-border/20" : ""}
+                        hover:bg-white/5`}
+                      data-testid={`slot-${slotId}`}
+                    >
+                      <AnimatePresence mode="popLayout">
+                        {slotTasks.map((task) => (
+                          <TaskBlock key={task.id} task={task} />
+                        ))}
+                      </AnimatePresence>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-6 mt-4 text-xs text-muted-foreground">
+      <div className="flex items-center justify-center gap-6 pt-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-rose-500/30 border-l-2 border-rose-500"></div>
+          <div className="w-4 h-4 rounded bg-rose-500/90"></div>
           Critical
         </span>
         <span className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-amber-500/30 border-l-2 border-amber-500"></div>
+          <div className="w-4 h-4 rounded bg-amber-500/90"></div>
           High
         </span>
         <span className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-primary/30 border-l-2 border-primary"></div>
+          <div className="w-4 h-4 rounded bg-indigo-500/90"></div>
           Medium
         </span>
         <span className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-muted/30 border-l-2 border-muted-foreground"></div>
+          <div className="w-4 h-4 rounded bg-slate-500/80"></div>
           Low
         </span>
       </div>
