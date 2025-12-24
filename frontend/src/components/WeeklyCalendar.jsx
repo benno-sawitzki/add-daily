@@ -256,6 +256,15 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
           Low
         </span>
       </div>
+
+      {/* Edit Dialog */}
+      <TaskEditDialog
+        task={editingTask}
+        open={!!editingTask}
+        onOpenChange={(open) => !open && setEditingTask(null)}
+        onSave={onUpdateTask}
+        onDelete={onDeleteTask}
+      />
     </div>
   );
 }
