@@ -22,10 +22,12 @@ for (let hour = 6; hour <= 22; hour++) {
 
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [dropTarget, setDropTarget] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [resizing, setResizing] = useState(null);
+  const [draggingTask, setDraggingTask] = useState(null);
+  const [dragPosition, setDragPosition] = useState(null);
+  const calendarRef = useRef(null);
   const dragTaskRef = useRef(null);
   const resizeStartY = useRef(null);
   const resizeStartDuration = useRef(null);
