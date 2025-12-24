@@ -295,33 +295,41 @@ async def health():
 @api_router.post("/auth/signup", response_model=AuthResponse)
 async def signup(user_data: UserSignup):
     """Register a new user with email and password"""
-    # Check if user exists
-    existing = await db.users.find_one({"email": user_data.email.lower()})
-    if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    
-    # Create user
-    user = User(
-        email=user_data.email.lower(),
-        name=user_data.name,
-        hashed_password=hash_password(user_data.password)
-    )
-    await db.users.insert_one(user.model_dump())
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Check if user exists
+        existing = await conn.fetchrow("SELECT id FROM users WHERE email = $1", user_data.email.lower())
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        
+        # Create user
+        user_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        await conn.execute(
+            """INSERT INTO users (id, email, name, hashed_password, created_at) 
+               VALUES ($1, $2, $3, $4, $5)""",
+            user_id, user_data.email.lower(), user_data.name, hash_password(user_data.password), created_at
+        )
     
     # Generate token
-    token = create_jwt_token(user.id, user.email)
+    token = create_jwt_token(user_id, user_data.email.lower())
     
     return AuthResponse(
         token=token,
-        user={"id": user.id, "email": user.email, "name": user.name, "avatar_url": user.avatar_url}
+        user={"id": user_id, "email": user_data.email.lower(), "name": user_data.name, "avatar_url": None}
     )
 
 @api_router.post("/auth/login", response_model=AuthResponse)
 async def login(credentials: UserLogin):
     """Login with email and password"""
-    user = await db.users.find_one({"email": credentials.email.lower()})
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow(
+            "SELECT id, email, name, hashed_password, avatar_url FROM users WHERE email = $1",
+            credentials.email.lower()
+        )
     
-    if not user or not user.get("hashed_password"):
+    if not user or not user["hashed_password"]:
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     if not verify_password(credentials.password, user["hashed_password"]):
@@ -331,7 +339,7 @@ async def login(credentials: UserLogin):
     
     return AuthResponse(
         token=token,
-        user={"id": user["id"], "email": user["email"], "name": user.get("name", ""), "avatar_url": user.get("avatar_url")}
+        user={"id": user["id"], "email": user["email"], "name": user["name"] or "", "avatar_url": user["avatar_url"]}
     )
 
 @api_router.get("/auth/me")
