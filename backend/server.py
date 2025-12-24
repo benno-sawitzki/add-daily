@@ -947,21 +947,14 @@ async def google_callback(code: str = Query(...)):
 
 @api_router.get("/auth/google/status")
 async def google_status():
-    """Check if Google Calendar is connected"""
-    connection = await db.google_auth.find_one({"id": "google_connection"}, {"_id": 0})
-    if connection and connection.get('access_token'):
-        return {
-            "connected": True,
-            "email": connection.get('email', 'unknown')
-        }
-    return {"connected": False}
+    """Check if Google Calendar is connected - DISABLED: pending Supabase migration"""
+    return {"connected": False, "message": "Google Calendar sync is currently disabled"}
 
 
 @api_router.post("/auth/google/disconnect")
 async def google_disconnect():
-    """Disconnect Google Calendar"""
-    await db.google_auth.delete_one({"id": "google_connection"})
-    return {"success": True, "message": "Google Calendar disconnected"}
+    """Disconnect Google Calendar - DISABLED: pending Supabase migration"""
+    return {"success": True, "message": "Google Calendar sync is currently disabled"}
 
 
 async def get_google_credentials():
