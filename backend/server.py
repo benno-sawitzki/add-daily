@@ -51,6 +51,100 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============ AUTH CONFIG ============
+JWT_SECRET = os.environ.get('JWT_SECRET', 'add-daily-secret-key-change-in-production')
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24 * 7  # 7 days
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# HTTP Bearer for JWT
+security = HTTPBearer(auto_error=False)
+
+# Google OAuth for login (different from calendar sync)
+GOOGLE_AUTH_REDIRECT_URI = f"{FRONTEND_URL}/api/auth/google/callback"
+
+# ============ AUTH MODELS ============
+class User(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    email: str
+    name: str = ""
+    hashed_password: Optional[str] = None
+    google_id: Optional[str] = None
+    avatar_url: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class UserSignup(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6)
+    name: str = Field(min_length=1)
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class GoogleAuthRequest(BaseModel):
+    code: str
+    redirect_uri: Optional[str] = None
+
+class AuthResponse(BaseModel):
+    token: str
+    user: dict
+
+class UserPublic(BaseModel):
+    id: str
+    email: str
+    name: str
+    avatar_url: Optional[str] = None
+
+# ============ AUTH HELPERS ============
+def hash_password(password: str) -> str:
+    return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
+
+def create_jwt_token(user_id: str, email: str) -> str:
+    payload = {
+        "sub": user_id,
+        "email": email,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS),
+        "iat": datetime.now(timezone.utc)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+def decode_jwt_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        return payload
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
+    if not credentials:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    payload = decode_jwt_token(credentials.credentials)
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "hashed_password": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+async def get_optional_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> Optional[dict]:
+    """Get current user if authenticated, otherwise return None"""
+    if not credentials:
+        return None
+    try:
+        payload = decode_jwt_token(credentials.credentials)
+        user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "hashed_password": 0})
+        return user
+    except:
+        return None
+
 # Models
 class Task(BaseModel):
     model_config = ConfigDict(extra="ignore")
