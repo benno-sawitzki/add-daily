@@ -184,6 +184,7 @@ function App() {
   };
 
   const inboxTasks = tasks.filter((t) => t.status === "inbox");
+  const completedTasks = tasks.filter((t) => t.status === "completed");
 
   const getModelDisplayName = () => {
     const allModels = [...AI_MODELS.openai, ...AI_MODELS.gemini];
