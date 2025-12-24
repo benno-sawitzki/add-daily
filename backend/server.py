@@ -25,9 +25,10 @@ load_dotenv(ROOT_DIR / '.env')
 # Google OAuth Config
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
 GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-GOOGLE_REDIRECT_URI = os.environ.get('REACT_APP_BACKEND_URL', 'https://speaktodo-5.preview.emergentagent.com') + '/api/auth/google/callback'
+# Use the frontend URL for redirect to avoid path issues
+FRONTEND_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://speaktodo-5.preview.emergentagent.com')
+GOOGLE_REDIRECT_URI = f"{FRONTEND_URL}/api/auth/google/callback"
 GOOGLE_SCOPES = ['https://www.googleapis.com/auth/calendar', 'https://www.googleapis.com/auth/userinfo.email']
-FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://speaktodo-5.preview.emergentagent.com')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
