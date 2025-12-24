@@ -1,14 +1,13 @@
-import { useState, useCallback } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, GripVertical } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, X } from "lucide-react";
 import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
-import { motion, AnimatePresence } from "framer-motion";
 
 const PRIORITY_COLORS = {
-  4: { bg: "bg-rose-500/90", border: "border-rose-400", text: "text-white" },
-  3: { bg: "bg-amber-500/90", border: "border-amber-400", text: "text-white" },
-  2: { bg: "bg-indigo-500/90", border: "border-indigo-400", text: "text-white" },
-  1: { bg: "bg-slate-500/80", border: "border-slate-400", text: "text-white" },
+  4: "bg-rose-500 text-white",
+  3: "bg-amber-500 text-white",
+  2: "bg-indigo-500 text-white",
+  1: "bg-slate-500 text-white",
 };
 
 // Generate time slots from 6 AM to 10 PM in 30-min intervals
@@ -20,8 +19,7 @@ for (let hour = 6; hour <= 22; hour++) {
 
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [draggedTask, setDraggedTask] = useState(null);
-  const [dragOverSlot, setDragOverSlot] = useState(null);
+  const [selectedTask, setSelectedTask] = useState(null);
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -36,108 +34,37 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     });
   };
 
-  const handleDragStart = (e, task) => {
-    setDraggedTask(task);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", task.id);
-    // Make drag image semi-transparent
-    if (e.target) {
-      e.target.style.opacity = "0.5";
-    }
-  };
-
-  const handleDragEnd = (e) => {
-    if (e.target) {
-      e.target.style.opacity = "1";
-    }
-    setDraggedTask(null);
-    setDragOverSlot(null);
-  };
-
-  const handleDragOver = (e, dateStr, time) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const slotId = `${dateStr}|${time}`;
-    if (dragOverSlot !== slotId) {
-      setDragOverSlot(slotId);
-    }
-  };
-
-  const handleDragLeave = (e) => {
-    // Only clear if leaving to outside
-    if (!e.relatedTarget || !e.currentTarget.contains(e.relatedTarget)) {
-      setDragOverSlot(null);
-    }
-  };
-
-  const handleDrop = (e, dateStr, time) => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData("text/plain");
-    
-    if (taskId) {
-      onUpdateTask(taskId, {
+  const handleSlotClick = (dateStr, time) => {
+    if (selectedTask) {
+      // Move selected task to this slot
+      onUpdateTask(selectedTask.id, {
         scheduled_date: dateStr,
         scheduled_time: time,
         status: "scheduled",
       });
+      setSelectedTask(null);
     }
-    
-    setDraggedTask(null);
-    setDragOverSlot(null);
   };
 
-  const handleComplete = (taskId) => {
+  const handleTaskClick = (e, task) => {
+    e.stopPropagation();
+    if (selectedTask?.id === task.id) {
+      setSelectedTask(null);
+    } else {
+      setSelectedTask(task);
+    }
+  };
+
+  const handleComplete = (e, taskId) => {
+    e.stopPropagation();
     onUpdateTask(taskId, { status: "completed" });
+    setSelectedTask(null);
   };
 
-  const TaskBlock = ({ task }) => {
-    const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
-    const isDragging = draggedTask?.id === task.id;
-
-    return (
-      <motion.div
-        layout
-        initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: isDragging ? 0.5 : 1, scale: 1 }}
-        exit={{ opacity: 0, scale: 0.8 }}
-        transition={{ duration: 0.15 }}
-        draggable
-        onDragStart={(e) => handleDragStart(e, task)}
-        onDragEnd={handleDragEnd}
-        className={`group relative px-2 py-1.5 rounded-md cursor-grab active:cursor-grabbing select-none
-          ${colors.bg} ${colors.text} border ${colors.border}
-          shadow-sm hover:shadow-md transition-shadow
-          ${isDragging ? "ring-2 ring-white/50" : ""}`}
-        data-testid={`task-block-${task.id}`}
-      >
-        <div className="flex items-center gap-1">
-          <GripVertical className="w-3 h-3 opacity-50 flex-shrink-0" />
-          <span className="text-xs font-medium truncate flex-1">{task.title}</span>
-        </div>
-        
-        {/* Quick actions on hover */}
-        <div className="absolute -right-1 -top-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleComplete(task.id);
-            }}
-            className="p-1 bg-emerald-500 rounded-full shadow-lg hover:bg-emerald-400 transition-colors"
-          >
-            <CheckCircle2 className="w-3 h-3 text-white" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onDeleteTask(task.id);
-            }}
-            className="p-1 bg-rose-500 rounded-full shadow-lg hover:bg-rose-400 transition-colors"
-          >
-            <Trash2 className="w-3 h-3 text-white" />
-          </button>
-        </div>
-      </motion.div>
-    );
+  const handleDelete = (e, taskId) => {
+    e.stopPropagation();
+    onDeleteTask(taskId);
+    setSelectedTask(null);
   };
 
   return (
@@ -177,17 +104,34 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
         </div>
       </div>
 
+      {/* Selected task indicator */}
+      {selectedTask && (
+        <div className="flex items-center gap-3 p-3 bg-primary/20 rounded-lg border border-primary/30">
+          <span className="text-sm">
+            Moving: <strong>{selectedTask.title}</strong>
+          </span>
+          <span className="text-xs text-muted-foreground">Click on a time slot to place it</span>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setSelectedTask(null)}
+            className="ml-auto"
+          >
+            <X className="w-4 h-4 mr-1" />
+            Cancel
+          </Button>
+        </div>
+      )}
+
       {/* Calendar Grid */}
-      <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20 backdrop-blur-sm">
-        {/* Day Headers - Fixed */}
-        <div className="grid grid-cols-[70px_repeat(7,1fr)] bg-card/80 border-b border-border/30 sticky top-0 z-10">
-          <div className="p-3 text-xs font-medium text-muted-foreground text-center border-r border-border/20">
-            
-          </div>
+      <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20">
+        {/* Day Headers */}
+        <div className="grid grid-cols-[70px_repeat(7,1fr)] bg-card/80 border-b border-border/30">
+          <div className="p-3 text-xs font-medium text-muted-foreground text-center border-r border-border/20" />
           {weekDays.map((day) => (
             <div
               key={format(day, "yyyy-MM-dd")}
-              className={`p-3 text-center border-r border-border/20 last:border-r-0 transition-colors ${
+              className={`p-3 text-center border-r border-border/20 last:border-r-0 ${
                 isToday(day) ? "bg-primary/20" : ""
               }`}
             >
@@ -202,7 +146,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
         </div>
 
         {/* Scrollable Time Grid */}
-        <div className="max-h-[550px] overflow-y-auto overflow-x-hidden">
+        <div className="max-h-[500px] overflow-y-auto">
           {TIME_SLOTS.map((time) => {
             const isHourMark = time.endsWith(":00");
             const [hours] = time.split(":").map(Number);
@@ -213,7 +157,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                 className={`grid grid-cols-[70px_repeat(7,1fr)] ${isHourMark ? "border-t border-border/40" : ""}`}
               >
                 {/* Time Label */}
-                <div className={`py-2 px-2 text-right border-r border-border/20 ${isHourMark ? "" : ""}`}>
+                <div className="py-2 px-2 text-right border-r border-border/20">
                   <span className={`text-xs font-medium ${isHourMark ? "text-muted-foreground" : "text-transparent"}`}>
                     {isHourMark ? format(new Date().setHours(hours, 0), "h:mm a") : "."}
                   </span>
@@ -222,28 +166,53 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                 {/* Day Cells */}
                 {weekDays.map((day) => {
                   const dateStr = format(day, "yyyy-MM-dd");
-                  const slotId = `${dateStr}|${time}`;
                   const slotTasks = getTasksForSlot(dateStr, time);
-                  const isOver = dragOverSlot === slotId;
 
                   return (
                     <div
-                      key={slotId}
-                      onDragOver={(e) => handleDragOver(e, dateStr, time)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, dateStr, time)}
-                      className={`min-h-[36px] border-b border-r border-border/10 p-0.5 transition-all duration-100
+                      key={`${dateStr}-${time}`}
+                      onClick={() => handleSlotClick(dateStr, time)}
+                      className={`min-h-[32px] border-b border-r border-border/10 p-0.5 cursor-pointer
                         ${isToday(day) ? "bg-primary/5" : ""}
-                        ${isOver ? "bg-primary/20 ring-2 ring-inset ring-primary/50" : ""}
-                        ${isHourMark ? "border-t border-t-border/20" : ""}
-                        hover:bg-white/5`}
-                      data-testid={`slot-${slotId}`}
+                        ${selectedTask ? "hover:bg-primary/20 hover:ring-2 hover:ring-inset hover:ring-primary/50" : "hover:bg-white/5"}
+                      `}
+                      data-testid={`slot-${dateStr}-${time}`}
                     >
-                      <AnimatePresence mode="popLayout">
-                        {slotTasks.map((task) => (
-                          <TaskBlock key={task.id} task={task} />
-                        ))}
-                      </AnimatePresence>
+                      {slotTasks.map((task) => {
+                        const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+                        const isSelected = selectedTask?.id === task.id;
+
+                        return (
+                          <div
+                            key={task.id}
+                            onClick={(e) => handleTaskClick(e, task)}
+                            className={`group relative px-2 py-1 rounded text-xs font-medium cursor-pointer
+                              ${colors}
+                              ${isSelected ? "ring-2 ring-white ring-offset-1 ring-offset-background" : ""}
+                              hover:opacity-90
+                            `}
+                            data-testid={`task-block-${task.id}`}
+                          >
+                            <span className="truncate block">{task.title}</span>
+                            
+                            {/* Action buttons */}
+                            <div className="absolute right-0 top-0 bottom-0 flex items-center gap-0.5 pr-1 opacity-0 group-hover:opacity-100">
+                              <button
+                                onClick={(e) => handleComplete(e, task.id)}
+                                className="p-0.5 bg-white/20 rounded hover:bg-white/40"
+                              >
+                                <CheckCircle2 className="w-3 h-3" />
+                              </button>
+                              <button
+                                onClick={(e) => handleDelete(e, task.id)}
+                                className="p-0.5 bg-white/20 rounded hover:bg-white/40"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -256,22 +225,27 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
       {/* Legend */}
       <div className="flex items-center justify-center gap-6 pt-2 text-xs text-muted-foreground">
         <span className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-rose-500/90"></div>
+          <div className="w-4 h-4 rounded bg-rose-500"></div>
           Critical
         </span>
         <span className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-amber-500/90"></div>
+          <div className="w-4 h-4 rounded bg-amber-500"></div>
           High
         </span>
         <span className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-indigo-500/90"></div>
+          <div className="w-4 h-4 rounded bg-indigo-500"></div>
           Medium
         </span>
         <span className="flex items-center gap-2">
-          <div className="w-4 h-4 rounded bg-slate-500/80"></div>
+          <div className="w-4 h-4 rounded bg-slate-500"></div>
           Low
         </span>
       </div>
+
+      {/* Instructions */}
+      <p className="text-center text-xs text-muted-foreground">
+        Click a task to select it, then click a time slot to move it
+      </p>
     </div>
   );
 }
