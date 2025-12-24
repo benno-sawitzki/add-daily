@@ -96,6 +96,14 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     onDeleteTask(taskId);
   };
 
+  const handleTaskClick = (e, task) => {
+    // Only open edit if not dragging
+    if (!dragTaskRef.current) {
+      e.stopPropagation();
+      setEditingTask(task);
+    }
+  };
+
   return (
     <div className="space-y-4" data-testid="weekly-calendar">
       {/* Header */}
