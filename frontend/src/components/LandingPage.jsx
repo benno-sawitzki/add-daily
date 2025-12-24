@@ -492,7 +492,7 @@ const LandingPage = () => {
               Your Productivity?
             </h2>
             <p className="text-lg text-white/60 mb-8 max-w-xl mx-auto">
-              Join thousands of people who've already simplified their task management with ADD Daily.
+              Join thousands of people who have already simplified their task management with ADD Daily.
             </p>
             <Button 
               size="lg" 
