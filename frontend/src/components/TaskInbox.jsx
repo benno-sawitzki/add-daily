@@ -31,6 +31,7 @@ const PRIORITY_CONFIG = {
 };
 
 export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
+  const [editingTask, setEditingTask] = useState(null);
   const sortedTasks = [...tasks].sort((a, b) => b.priority - a.priority);
 
   const handleScheduleTask = (taskId, date) => {
