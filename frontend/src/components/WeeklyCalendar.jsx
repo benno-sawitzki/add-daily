@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, CheckCircle2, Trash2 } from "lucide-react";
 import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
 
 const PRIORITY_COLORS = {
@@ -19,7 +19,8 @@ for (let hour = 6; hour <= 22; hour++) {
 
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [selectedTask, setSelectedTask] = useState(null);
+  const [dropTarget, setDropTarget] = useState(null);
+  const dragTaskRef = useRef(null);
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -34,37 +35,63 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     });
   };
 
-  const handleSlotClick = (dateStr, time) => {
-    if (selectedTask) {
-      // Move selected task to this slot
-      onUpdateTask(selectedTask.id, {
+  const handleDragStart = (e, task) => {
+    dragTaskRef.current = task;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("taskId", task.id);
+    
+    // Create custom drag image
+    const dragEl = e.target.cloneNode(true);
+    dragEl.style.position = "absolute";
+    dragEl.style.top = "-1000px";
+    dragEl.style.opacity = "0.9";
+    dragEl.style.transform = "scale(1.05)";
+    document.body.appendChild(dragEl);
+    e.dataTransfer.setDragImage(dragEl, 50, 15);
+    setTimeout(() => document.body.removeChild(dragEl), 0);
+  };
+
+  const handleDragEnd = () => {
+    dragTaskRef.current = null;
+    setDropTarget(null);
+  };
+
+  const handleDragOver = (e, dateStr, time) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDropTarget(`${dateStr}|${time}`);
+  };
+
+  const handleDragLeave = () => {
+    setDropTarget(null);
+  };
+
+  const handleDrop = (e, dateStr, time) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData("taskId");
+    
+    if (taskId) {
+      onUpdateTask(taskId, {
         scheduled_date: dateStr,
         scheduled_time: time,
         status: "scheduled",
       });
-      setSelectedTask(null);
     }
-  };
-
-  const handleTaskClick = (e, task) => {
-    e.stopPropagation();
-    if (selectedTask?.id === task.id) {
-      setSelectedTask(null);
-    } else {
-      setSelectedTask(task);
-    }
+    
+    dragTaskRef.current = null;
+    setDropTarget(null);
   };
 
   const handleComplete = (e, taskId) => {
     e.stopPropagation();
+    e.preventDefault();
     onUpdateTask(taskId, { status: "completed" });
-    setSelectedTask(null);
   };
 
   const handleDelete = (e, taskId) => {
     e.stopPropagation();
+    e.preventDefault();
     onDeleteTask(taskId);
-    setSelectedTask(null);
   };
 
   return (
@@ -77,7 +104,6 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             variant="ghost"
             size="icon"
             onClick={() => setCurrentDate(subWeeks(currentDate, 1))}
-            data-testid="prev-week"
           >
             <ChevronLeft className="w-5 h-5" />
           </Button>
@@ -88,7 +114,6 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             variant="ghost"
             size="icon"
             onClick={() => setCurrentDate(addWeeks(currentDate, 1))}
-            data-testid="next-week"
           >
             <ChevronRight className="w-5 h-5" />
           </Button>
@@ -97,37 +122,17 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             size="sm"
             onClick={() => setCurrentDate(new Date())}
             className="ml-2"
-            data-testid="today-btn"
           >
             Today
           </Button>
         </div>
       </div>
 
-      {/* Selected task indicator */}
-      {selectedTask && (
-        <div className="flex items-center gap-3 p-3 bg-primary/20 rounded-lg border border-primary/30">
-          <span className="text-sm">
-            Moving: <strong>{selectedTask.title}</strong>
-          </span>
-          <span className="text-xs text-muted-foreground">Click on a time slot to place it</span>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setSelectedTask(null)}
-            className="ml-auto"
-          >
-            <X className="w-4 h-4 mr-1" />
-            Cancel
-          </Button>
-        </div>
-      )}
-
       {/* Calendar Grid */}
       <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20">
         {/* Day Headers */}
         <div className="grid grid-cols-[70px_repeat(7,1fr)] bg-card/80 border-b border-border/30">
-          <div className="p-3 text-xs font-medium text-muted-foreground text-center border-r border-border/20" />
+          <div className="p-3 border-r border-border/20" />
           {weekDays.map((day) => (
             <div
               key={format(day, "yyyy-MM-dd")}
@@ -145,7 +150,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
           ))}
         </div>
 
-        {/* Scrollable Time Grid */}
+        {/* Time Grid */}
         <div className="max-h-[500px] overflow-y-auto">
           {TIME_SLOTS.map((time) => {
             const isHourMark = time.endsWith(":00");
@@ -158,54 +163,53 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
               >
                 {/* Time Label */}
                 <div className="py-2 px-2 text-right border-r border-border/20">
-                  <span className={`text-xs font-medium ${isHourMark ? "text-muted-foreground" : "text-transparent"}`}>
-                    {isHourMark ? format(new Date().setHours(hours, 0), "h:mm a") : "."}
-                  </span>
+                  {isHourMark && (
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {format(new Date().setHours(hours, 0), "h:mm a")}
+                    </span>
+                  )}
                 </div>
 
                 {/* Day Cells */}
                 {weekDays.map((day) => {
                   const dateStr = format(day, "yyyy-MM-dd");
+                  const slotKey = `${dateStr}|${time}`;
                   const slotTasks = getTasksForSlot(dateStr, time);
+                  const isDropHere = dropTarget === slotKey;
 
                   return (
                     <div
-                      key={`${dateStr}-${time}`}
-                      onClick={() => handleSlotClick(dateStr, time)}
-                      className={`min-h-[32px] border-b border-r border-border/10 p-0.5 cursor-pointer
+                      key={slotKey}
+                      onDragOver={(e) => handleDragOver(e, dateStr, time)}
+                      onDragLeave={handleDragLeave}
+                      onDrop={(e) => handleDrop(e, dateStr, time)}
+                      className={`min-h-[32px] border-b border-r border-border/10 p-0.5
                         ${isToday(day) ? "bg-primary/5" : ""}
-                        ${selectedTask ? "hover:bg-primary/20 hover:ring-2 hover:ring-inset hover:ring-primary/50" : "hover:bg-white/5"}
+                        ${isDropHere ? "bg-primary/30 ring-2 ring-inset ring-primary" : ""}
                       `}
-                      data-testid={`slot-${dateStr}-${time}`}
                     >
                       {slotTasks.map((task) => {
                         const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
-                        const isSelected = selectedTask?.id === task.id;
 
                         return (
                           <div
                             key={task.id}
-                            onClick={(e) => handleTaskClick(e, task)}
-                            className={`group relative px-2 py-1 rounded text-xs font-medium cursor-pointer
-                              ${colors}
-                              ${isSelected ? "ring-2 ring-white ring-offset-1 ring-offset-background" : ""}
-                              hover:opacity-90
-                            `}
-                            data-testid={`task-block-${task.id}`}
+                            draggable
+                            onDragStart={(e) => handleDragStart(e, task)}
+                            onDragEnd={handleDragEnd}
+                            className={`group flex items-center justify-between px-2 py-1 rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors}`}
                           >
-                            <span className="truncate block">{task.title}</span>
-                            
-                            {/* Action buttons */}
-                            <div className="absolute right-0 top-0 bottom-0 flex items-center gap-0.5 pr-1 opacity-0 group-hover:opacity-100">
+                            <span className="truncate">{task.title}</span>
+                            <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 flex-shrink-0 ml-1">
                               <button
                                 onClick={(e) => handleComplete(e, task.id)}
-                                className="p-0.5 bg-white/20 rounded hover:bg-white/40"
+                                className="p-0.5 hover:bg-white/30 rounded"
                               >
                                 <CheckCircle2 className="w-3 h-3" />
                               </button>
                               <button
                                 onClick={(e) => handleDelete(e, task.id)}
-                                className="p-0.5 bg-white/20 rounded hover:bg-white/40"
+                                className="p-0.5 hover:bg-white/30 rounded"
                               >
                                 <Trash2 className="w-3 h-3" />
                               </button>
@@ -241,11 +245,6 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
           Low
         </span>
       </div>
-
-      {/* Instructions */}
-      <p className="text-center text-xs text-muted-foreground">
-        Click a task to select it, then click a time slot to move it
-      </p>
     </div>
   );
 }
