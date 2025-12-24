@@ -551,24 +551,15 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         ) : (
           <>
             {/* VU Meter + Record Button Container */}
-            <div className="relative mb-8 flex items-center justify-center" style={{ width: 160, height: 160 }}>
+            <div className="relative mb-8 flex items-center justify-center" style={{ width: 200, height: 200 }}>
               {/* VU Meter Ring */}
               <VUMeterRing 
                 level={audioLevel} 
                 isRecording={isRecording} 
-                size={160}
+                size={200}
               />
               
-              {/* Pulse animation when recording (fallback visual) */}
-              {isRecording && (
-                <motion.div
-                  className="absolute inset-0 rounded-full border border-rose-500/20"
-                  initial={{ scale: 1, opacity: 0.3 }}
-                  animate={{ scale: 1.4, opacity: 0 }}
-                  transition={{ duration: 2, repeat: Infinity, ease: "easeOut" }}
-                  style={{ width: 160, height: 160 }}
-                />
-              )}
+              {/* Pulse animation when recording (fallback visual) - removed, VU meter handles this */}
 
               {/* Record Button */}
               <motion.button
