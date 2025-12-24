@@ -670,8 +670,15 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
                     status="scheduled"
                 )
                 
-                doc = task.model_dump()
-                await db.tasks.insert_one(doc)
+                pool = await get_db_pool()
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
+                           scheduled_date, scheduled_time, duration, status, created_at)
+                           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                        task.id, user["id"], task.title, task.description, task.priority, task.urgency, task.importance,
+                        date, scheduled_time, task.duration, task.status, datetime.now(timezone.utc)
+                    )
                 created_tasks.append(task)
                 
                 # Advance time by task duration
