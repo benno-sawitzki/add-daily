@@ -864,10 +864,14 @@ async def export_ical(user: dict = Depends(get_current_user)):
     """Export scheduled tasks as iCal (.ics) file"""
     try:
         # Fetch all scheduled tasks for this user
-        tasks = await db.tasks.find(
-            {"user_id": user["id"], "status": "scheduled", "scheduled_date": {"$ne": None}},
-            {"_id": 0}
-        ).to_list(1000)
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                """SELECT id, title, description, priority, scheduled_date::text, scheduled_time, duration 
+                   FROM tasks WHERE user_id = $1 AND status = 'scheduled' AND scheduled_date IS NOT NULL""",
+                user["id"]
+            )
+        tasks = [dict(row) for row in rows]
         
         # Generate iCal content
         ical_lines = [
