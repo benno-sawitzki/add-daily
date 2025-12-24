@@ -221,7 +221,17 @@ function App() {
 
   return (
     <div className="app-container" data-testid="app-container">
-      <Toaster position="top-right" richColors />
+      <Toaster 
+        position="top-right" 
+        richColors 
+        duration={2000}
+        toastOptions={{
+          style: {
+            padding: '12px 16px',
+            fontSize: '14px',
+          },
+        }}
+      />
       
       {/* Header */}
       <header className="border-b border-border/50 bg-card/50 backdrop-blur-xl sticky top-0 z-30" data-testid="app-header">
