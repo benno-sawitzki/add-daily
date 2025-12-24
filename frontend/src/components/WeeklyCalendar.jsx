@@ -286,7 +286,29 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
         </div>
 
         {/* Time Grid */}
-        <div className="max-h-[500px] overflow-y-auto relative">
+        <div 
+          ref={calendarRef}
+          className="max-h-[500px] overflow-y-auto relative"
+          onDragOver={handleCalendarDragOver}
+          onDrop={handleCalendarDrop}
+        >
+          {/* Ghost preview of dragging task */}
+          {draggingTask && dragPosition && (
+            <div
+              className="absolute pointer-events-none z-30 opacity-70"
+              style={{
+                left: `calc(70px + ${dragPosition.dayIndex} * ((100% - 70px) / 7) + 4px)`,
+                top: `${dragPosition.slotIndex * SLOT_HEIGHT + 2}px`,
+                width: `calc((100% - 70px) / 7 - 8px)`,
+                height: `${((draggingTask.duration || 30) / 30) * SLOT_HEIGHT - 4}px`,
+              }}
+            >
+              <div className={`h-full rounded ${PRIORITY_COLORS[draggingTask.priority] || PRIORITY_COLORS[2]} p-1.5 text-xs font-medium shadow-lg`}>
+                <span className="truncate block">{draggingTask.title}</span>
+              </div>
+            </div>
+          )}
+
           {/* Current time indicator */}
           {weekDays.some(d => isToday(d)) && (() => {
             const hours = currentTime.getHours();
