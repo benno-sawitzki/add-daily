@@ -57,8 +57,6 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [queuedTasks, setQueuedTasks] = useState([]);
   const [showTaskQueue, setShowTaskQueue] = useState(false);
-  const [googleCalendar, setGoogleCalendar] = useState({ connected: false, email: null });
-  const [isSyncing, setIsSyncing] = useState(false);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -79,73 +77,10 @@ function App() {
     }
   }, []);
 
-  const fetchGoogleStatus = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/auth/google/status`);
-      setGoogleCalendar(response.data);
-    } catch (error) {
-      console.error("Error fetching Google status:", error);
-    }
-  }, []);
-
   useEffect(() => {
     fetchTasks();
     fetchSettings();
-    fetchGoogleStatus();
-    
-    // Check URL params for Google auth callback
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('google_connected') === 'true') {
-      toast.success(`Google Calendar connected: ${params.get('email')}`);
-      fetchGoogleStatus();
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (params.get('google_error')) {
-      toast.error(`Google auth failed: ${params.get('google_error')}`);
-      window.history.replaceState({}, '', window.location.pathname);
-    }
-  }, [fetchTasks, fetchSettings, fetchGoogleStatus]);
-
-  const connectGoogleCalendar = async () => {
-    try {
-      const response = await axios.get(`${API}/auth/google/login`);
-      window.location.href = response.data.authorization_url;
-    } catch (error) {
-      console.error("Error starting Google auth:", error);
-      toast.error("Failed to start Google authentication");
-    }
-  };
-
-  const disconnectGoogleCalendar = async () => {
-    try {
-      await axios.post(`${API}/auth/google/disconnect`);
-      setGoogleCalendar({ connected: false, email: null });
-      toast.success("Google Calendar disconnected");
-    } catch (error) {
-      console.error("Error disconnecting:", error);
-      toast.error("Failed to disconnect");
-    }
-  };
-
-  const syncToGoogleCalendar = async () => {
-    if (!googleCalendar.connected) {
-      toast.error("Please connect Google Calendar first");
-      return;
-    }
-    
-    setIsSyncing(true);
-    try {
-      const response = await axios.post(`${API}/calendar/sync`);
-      toast.success(`Synced ${response.data.synced_count} tasks to Google Calendar`);
-      if (response.data.errors?.length > 0) {
-        console.warn("Sync errors:", response.data.errors);
-      }
-    } catch (error) {
-      console.error("Sync error:", error);
-      toast.error("Failed to sync to Google Calendar");
-    } finally {
-      setIsSyncing(false);
-    }
-  };
+  }, [fetchTasks, fetchSettings]);
 
   const updateTask = async (taskId, updates) => {
     try {
