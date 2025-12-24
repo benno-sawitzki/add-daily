@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, CheckCircle2, Trash2 } from "lucide-react";
 import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
+import TaskEditDialog from "./TaskEditDialog";
 
 const PRIORITY_COLORS = {
   4: "bg-rose-500 text-white",
