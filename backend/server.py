@@ -777,12 +777,12 @@ async def transcribe_audio(audio: UploadFile = File(...), user: dict = Depends(g
 from fastapi.responses import Response
 
 @api_router.get("/tasks/export/ical")
-async def export_ical():
+async def export_ical(user: dict = Depends(get_current_user)):
     """Export scheduled tasks as iCal (.ics) file"""
     try:
-        # Fetch all scheduled tasks
+        # Fetch all scheduled tasks for this user
         tasks = await db.tasks.find(
-            {"status": "scheduled", "scheduled_date": {"$ne": None}},
+            {"user_id": user["id"], "status": "scheduled", "scheduled_date": {"$ne": None}},
             {"_id": 0}
         ).to_list(1000)
         
