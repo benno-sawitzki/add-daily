@@ -797,7 +797,7 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
                     values_list.append(
                         f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
                         f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
-                        f"${param_num+8}, ${param_num+9})"
+                        f"${param_num+8}, ${param_num+9}, ${param_num+10}, ${param_num+11})"
                     )
                     params.extend([
                         task_id,
@@ -807,16 +807,18 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
                         task_data.get("priority", 2),
                         task_data.get("urgency", 2),
                         task_data.get("importance", 2),
+                        None,  # scheduled_date (NULL for inbox tasks)
+                        None,  # scheduled_time (NULL for inbox tasks)
                         task_data.get("duration", 30),
                         "inbox",  # status
                         created_at
                     ])
-                    param_num += 10
+                    param_num += 12
                 
                 # Single batch INSERT with RETURNING - much faster!
                 query = f"""
                     INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-                                     duration, status, created_at)
+                                     scheduled_date, scheduled_time, duration, status, created_at)
                     VALUES {', '.join(values_list)}
                     RETURNING id, user_id, title, description, priority, urgency, importance, 
                               scheduled_date::text, scheduled_time, duration, status, created_at::text
@@ -846,18 +848,27 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
         # Group tasks by date
         tasks_by_date = {}
         for task_data in request.tasks:
-            date = task_data.get("scheduled_date") or today
-            if date not in tasks_by_date:
-                tasks_by_date[date] = []
-            tasks_by_date[date].append(task_data)
+            date_str = task_data.get("scheduled_date") or today
+            if date_str not in tasks_by_date:
+                tasks_by_date[date_str] = []
+            tasks_by_date[date_str].append(task_data)
         
         created_tasks = []
         pool = await get_db_pool()
         
         async with pool.acquire() as conn:
-            for date, date_tasks in tasks_by_date.items():
+            for date_str, date_tasks in tasks_by_date.items():
+                # Convert date string to date object for asyncpg (always a string from dict key)
+                try:
+                    date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
+                except ValueError:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid date format for scheduled_date: {date_str}. Expected YYYY-MM-DD"
+                    )
+                
                 # Start scheduling 1 hour from now for today, 9 AM for other days
-                if date == today:
+                if date_str == today:
                     current_hour = now.hour + 1
                 else:
                     current_hour = 9
@@ -886,18 +897,6 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
                     importance = max(1, min(4, importance))
                     
                     created_at = datetime.now(timezone.utc)
-                    
-                    # Convert date string to date object for asyncpg
-                    if isinstance(date, str):
-                        try:
-                            date_obj = datetime.strptime(date, "%Y-%m-%d").date()
-                        except ValueError:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Invalid date format: {date}. Expected YYYY-MM-DD"
-                            )
-                    else:
-                        date_obj = date
                     
                     try:
                         await conn.execute(
