@@ -591,6 +591,278 @@ async def export_ical():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ===== Google Calendar Integration =====
+
+@api_router.get("/auth/google/login")
+async def google_login():
+    """Start Google OAuth flow"""
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(status_code=500, detail="Google OAuth not configured")
+    
+    auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={GOOGLE_REDIRECT_URI}&"
+        "response_type=code&"
+        f"scope={' '.join(GOOGLE_SCOPES)}&"
+        "access_type=offline&"
+        "prompt=consent"
+    )
+    return {"authorization_url": auth_url}
+
+
+@api_router.get("/auth/google/callback")
+async def google_callback(code: str = Query(...)):
+    """Handle Google OAuth callback"""
+    try:
+        # Exchange code for tokens
+        token_resp = requests.post('https://oauth2.googleapis.com/token', data={
+            'code': code,
+            'client_id': GOOGLE_CLIENT_ID,
+            'client_secret': GOOGLE_CLIENT_SECRET,
+            'redirect_uri': GOOGLE_REDIRECT_URI,
+            'grant_type': 'authorization_code'
+        }).json()
+        
+        if 'error' in token_resp:
+            logger.error(f"Token error: {token_resp}")
+            return RedirectResponse(f"{FRONTEND_URL}?google_error={token_resp.get('error_description', 'Auth failed')}")
+        
+        # Get user info
+        user_info = requests.get(
+            'https://www.googleapis.com/oauth2/v2/userinfo',
+            headers={'Authorization': f'Bearer {token_resp["access_token"]}'}
+        ).json()
+        
+        email = user_info.get('email', 'unknown')
+        
+        # Save tokens to database
+        await db.google_auth.update_one(
+            {"id": "google_connection"},
+            {"$set": {
+                "email": email,
+                "access_token": token_resp.get('access_token'),
+                "refresh_token": token_resp.get('refresh_token'),
+                "expires_at": datetime.now(timezone.utc) + timedelta(seconds=token_resp.get('expires_in', 3600)),
+                "connected_at": datetime.now(timezone.utc).isoformat()
+            }},
+            upsert=True
+        )
+        
+        logger.info(f"Google Calendar connected for {email}")
+        return RedirectResponse(f"{FRONTEND_URL}?google_connected=true&email={email}")
+        
+    except Exception as e:
+        logger.error(f"Google callback error: {str(e)}")
+        return RedirectResponse(f"{FRONTEND_URL}?google_error={str(e)}")
+
+
+@api_router.get("/auth/google/status")
+async def google_status():
+    """Check if Google Calendar is connected"""
+    connection = await db.google_auth.find_one({"id": "google_connection"}, {"_id": 0})
+    if connection and connection.get('access_token'):
+        return {
+            "connected": True,
+            "email": connection.get('email', 'unknown')
+        }
+    return {"connected": False}
+
+
+@api_router.post("/auth/google/disconnect")
+async def google_disconnect():
+    """Disconnect Google Calendar"""
+    await db.google_auth.delete_one({"id": "google_connection"})
+    return {"success": True, "message": "Google Calendar disconnected"}
+
+
+async def get_google_credentials():
+    """Get valid Google credentials, refreshing if needed"""
+    connection = await db.google_auth.find_one({"id": "google_connection"})
+    if not connection or not connection.get('access_token'):
+        return None
+    
+    creds = Credentials(
+        token=connection['access_token'],
+        refresh_token=connection.get('refresh_token'),
+        token_uri='https://oauth2.googleapis.com/token',
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET
+    )
+    
+    # Refresh if expired
+    if creds.expired and creds.refresh_token:
+        try:
+            creds.refresh(GoogleRequest())
+            await db.google_auth.update_one(
+                {"id": "google_connection"},
+                {"$set": {
+                    "access_token": creds.token,
+                    "expires_at": datetime.now(timezone.utc) + timedelta(seconds=3600)
+                }}
+            )
+        except Exception as e:
+            logger.error(f"Token refresh failed: {e}")
+            return None
+    
+    return creds
+
+
+@api_router.post("/calendar/sync")
+async def sync_to_google_calendar():
+    """Sync all scheduled tasks to Google Calendar"""
+    creds = await get_google_credentials()
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google Calendar not connected")
+    
+    try:
+        service = build('calendar', 'v3', credentials=creds)
+        
+        # Get all scheduled tasks
+        tasks = await db.tasks.find(
+            {"status": "scheduled", "scheduled_date": {"$ne": None}},
+            {"_id": 0}
+        ).to_list(1000)
+        
+        synced_count = 0
+        errors = []
+        
+        for task in tasks:
+            try:
+                scheduled_date = task.get('scheduled_date')
+                scheduled_time = task.get('scheduled_time', '09:00') or '09:00'
+                duration = task.get('duration', 30) or 30
+                
+                if not scheduled_date:
+                    continue
+                
+                # Calculate start and end times
+                start_dt = f"{scheduled_date}T{scheduled_time}:00"
+                
+                # Calculate end time
+                start_hour, start_min = map(int, scheduled_time.split(':'))
+                end_min = start_min + duration
+                end_hour = start_hour
+                while end_min >= 60:
+                    end_min -= 60
+                    end_hour += 1
+                end_time = f"{end_hour:02d}:{end_min:02d}"
+                end_dt = f"{scheduled_date}T{end_time}:00"
+                
+                # Check if task already synced (by checking extended properties)
+                task_id = task.get('id')
+                google_event_id = task.get('google_event_id')
+                
+                event_body = {
+                    'summary': task.get('title', 'Untitled Task'),
+                    'description': task.get('description', ''),
+                    'start': {
+                        'dateTime': start_dt,
+                        'timeZone': 'Europe/Berlin'  # You can make this configurable
+                    },
+                    'end': {
+                        'dateTime': end_dt,
+                        'timeZone': 'Europe/Berlin'
+                    },
+                    'extendedProperties': {
+                        'private': {
+                            'addDailyTaskId': task_id
+                        }
+                    }
+                }
+                
+                if google_event_id:
+                    # Update existing event
+                    service.events().update(
+                        calendarId='primary',
+                        eventId=google_event_id,
+                        body=event_body
+                    ).execute()
+                else:
+                    # Create new event
+                    created_event = service.events().insert(
+                        calendarId='primary',
+                        body=event_body
+                    ).execute()
+                    
+                    # Save Google event ID to task
+                    await db.tasks.update_one(
+                        {"id": task_id},
+                        {"$set": {"google_event_id": created_event['id']}}
+                    )
+                
+                synced_count += 1
+                
+            except Exception as e:
+                errors.append(f"Task '{task.get('title')}': {str(e)}")
+                logger.error(f"Failed to sync task {task.get('id')}: {e}")
+        
+        return {
+            "success": True,
+            "synced_count": synced_count,
+            "total_tasks": len(tasks),
+            "errors": errors if errors else None
+        }
+        
+    except Exception as e:
+        logger.error(f"Google Calendar sync error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.post("/calendar/sync-task/{task_id}")
+async def sync_single_task(task_id: str):
+    """Sync a single task to Google Calendar"""
+    creds = await get_google_credentials()
+    if not creds:
+        raise HTTPException(status_code=401, detail="Google Calendar not connected")
+    
+    task = await db.tasks.find_one({"id": task_id}, {"_id": 0})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    
+    if task.get('status') != 'scheduled' or not task.get('scheduled_date'):
+        raise HTTPException(status_code=400, detail="Task is not scheduled")
+    
+    try:
+        service = build('calendar', 'v3', credentials=creds)
+        
+        scheduled_date = task['scheduled_date']
+        scheduled_time = task.get('scheduled_time', '09:00') or '09:00'
+        duration = task.get('duration', 30) or 30
+        
+        # Calculate times
+        start_dt = f"{scheduled_date}T{scheduled_time}:00"
+        start_hour, start_min = map(int, scheduled_time.split(':'))
+        end_min = start_min + duration
+        end_hour = start_hour
+        while end_min >= 60:
+            end_min -= 60
+            end_hour += 1
+        end_dt = f"{scheduled_date}T{end_hour:02d}:{end_min:02d}:00"
+        
+        event_body = {
+            'summary': task.get('title', 'Untitled Task'),
+            'description': task.get('description', ''),
+            'start': {'dateTime': start_dt, 'timeZone': 'Europe/Berlin'},
+            'end': {'dateTime': end_dt, 'timeZone': 'Europe/Berlin'},
+            'extendedProperties': {'private': {'addDailyTaskId': task_id}}
+        }
+        
+        google_event_id = task.get('google_event_id')
+        
+        if google_event_id:
+            service.events().update(calendarId='primary', eventId=google_event_id, body=event_body).execute()
+        else:
+            created_event = service.events().insert(calendarId='primary', body=event_body).execute()
+            await db.tasks.update_one({"id": task_id}, {"$set": {"google_event_id": created_event['id']}})
+        
+        return {"success": True, "message": "Task synced to Google Calendar"}
+        
+    except Exception as e:
+        logger.error(f"Single task sync error: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Include the router in the main app
 app.include_router(api_router)
 
