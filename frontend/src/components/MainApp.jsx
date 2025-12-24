@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import "@/App.css";
 import axios from "axios";
-import { Toaster, toast } from "sonner";
+import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +22,8 @@ import {
   ChevronDown,
   Brain,
   Sparkles,
+  LogOut,
+  User,
 } from "lucide-react";
 import TaskInbox from "@/components/TaskInbox";
 import WeeklyCalendar from "@/components/WeeklyCalendar";
@@ -29,6 +31,8 @@ import DailyCalendar from "@/components/DailyCalendar";
 import VoiceOverlay from "@/components/VoiceOverlay";
 import TaskQueue from "@/components/TaskQueue";
 import CompletedTasks from "@/components/CompletedTasks";
+import { useAuth } from "@/contexts/AuthContext";
+import { useNavigate } from "react-router-dom";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
