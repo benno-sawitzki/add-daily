@@ -2,16 +2,9 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   CheckCircle2,
   Trash2,
   Clock,
-  MoreVertical,
   Calendar,
   AlertCircle,
   ArrowUp,
