@@ -364,19 +364,13 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                 {/* Day Cells */}
                 {weekDays.map((day) => {
                   const dateStr = format(day, "yyyy-MM-dd");
-                  const slotKey = `${dateStr}|${time}`;
                   const slotTasks = getTasksForSlot(dateStr, time);
-                  const isDropHere = dropTarget === slotKey;
 
                   return (
                     <div
-                      key={slotKey}
-                      onDragOver={(e) => handleDragOver(e, dateStr, time)}
-                      onDragLeave={handleDragLeave}
-                      onDrop={(e) => handleDrop(e, dateStr, time)}
+                      key={`${dateStr}|${time}`}
                       className={`relative border-b border-r border-border/10 p-0.5
                         ${isToday(day) ? "bg-primary/5" : ""}
-                        ${isDropHere ? "bg-primary/30 ring-2 ring-inset ring-primary" : ""}
                       `}
                       style={{ height: `${SLOT_HEIGHT}px` }}
                     >
