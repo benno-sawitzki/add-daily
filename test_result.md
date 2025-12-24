@@ -101,3 +101,139 @@
 #====================================================================================================
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
+
+user_problem_statement: Build a voice-powered task management app called "ADD Daily" with voice input, AI task extraction, Task Queue with drag-and-drop reordering, push to calendar or inbox, and calendar views.
+
+backend:
+  - task: "Process tasks API endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Endpoint POST /api/process-tasks works correctly"
+
+  - task: "Transcribe audio API endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Endpoint POST /api/transcribe works with Whisper"
+
+  - task: "Bulk inbox API endpoint"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Endpoint POST /api/tasks/inbox-bulk added - tested via frontend, tasks successfully pushed to inbox"
+
+frontend:
+  - task: "Voice overlay with recording"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/VoiceOverlay.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Voice overlay renders correctly with Voice/Type toggle"
+
+  - task: "Audio visualizer animation"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/VoiceOverlay.jsx"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "user"
+        comment: "User reported: UV meter looks ugly like a broken sun with unevenly distributed rays"
+      - working: "NA"
+        agent: "main"
+        comment: "Fixed: Replaced individual frequency bars with smooth concentric pulsing rings. Cannot fully test without microphone access."
+
+  - task: "Task Queue drag-and-drop"
+    implemented: true
+    working: "NA"
+    file: "/app/frontend/src/components/TaskQueue.jsx"
+    stuck_count: 1
+    priority: "high"
+    needs_retesting: true
+    status_history:
+      - working: false
+        agent: "user"
+        comment: "User reported: When releasing mouse after drag, task snaps back to original position before settling into new place"
+      - working: "NA"
+        agent: "main"
+        comment: "Fixed: Implemented immediate visual reordering using local visualTasks state that updates during drag, eliminating snap-back behavior"
+
+  - task: "Push to Inbox button"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/TaskQueue.jsx"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "To Inbox button visible in Task Queue, tested end-to-end flow - tasks successfully added to inbox with success toast"
+
+  - task: "Calendar weekly view"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/WeeklyCalendar.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Weekly calendar displays correctly"
+
+  - task: "Calendar daily view"
+    implemented: true
+    working: true
+    file: "/app/frontend/src/components/DailyCalendar.jsx"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Daily calendar displays correctly"
+
+metadata:
+  created_by: "main_agent"
+  version: "1.0"
+  test_sequence: 1
+  run_ui: true
+
+test_plan:
+  current_focus:
+    - "Task Queue drag-and-drop"
+    - "Audio visualizer animation"
+  stuck_tasks: []
+  test_all: false
+  test_priority: "high_first"
+
+agent_communication:
+  - agent: "main"
+    message: "Fixed two user-reported issues: 1) Audio visualizer changed from individual bars to smooth concentric pulsing rings for better aesthetics. 2) Task Queue drag-and-drop now uses local visualTasks state for immediate visual feedback without snap-back. Please test the Task Queue drag-and-drop behavior thoroughly - verify tasks stay in position immediately after drop without jumping back. Audio visualizer needs microphone to test."
