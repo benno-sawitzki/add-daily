@@ -260,7 +260,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
 
       {/* Time Grid */}
       <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20">
-        <div className="max-h-[500px] overflow-y-auto relative">
+        <div ref={scrollContainerRef} className="max-h-[500px] overflow-y-auto relative">
           {/* Current time line */}
           {timePosition !== null && (
             <div
