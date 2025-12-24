@@ -102,10 +102,10 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   };
 
   const handleTaskClick = (e, task) => {
-    if (!dragTaskRef.current && !resizing) {
-      e.stopPropagation();
-      setEditingTask(task);
-    }
+    // Don't open edit if we just finished resizing
+    if (resizing) return;
+    e.stopPropagation();
+    setEditingTask(task);
   };
 
   // Resize handlers
@@ -138,7 +138,8 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
         onUpdateTask(task.id, { duration: newDuration });
       }
       
-      setResizing(null);
+      // Delay clearing resizing state to prevent click from firing
+      setTimeout(() => setResizing(null), 100);
       document.removeEventListener("mousemove", handleMouseMove);
       document.removeEventListener("mouseup", handleMouseUp);
     };
