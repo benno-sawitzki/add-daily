@@ -69,6 +69,7 @@ class TaskUpdate(BaseModel):
     importance: Optional[int] = None
     scheduled_date: Optional[str] = None
     scheduled_time: Optional[str] = None
+    duration: Optional[int] = None
     status: Optional[str] = None
 
 class VoiceInput(BaseModel):
