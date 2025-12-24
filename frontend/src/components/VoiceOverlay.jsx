@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Slider } from "@/components/ui/slider";
 import { Mic, X, Loader2, Send, Keyboard, Square, Wand2 } from "lucide-react";
 import { motion } from "framer-motion";
 import axios from "axios";
