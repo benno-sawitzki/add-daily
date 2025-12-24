@@ -49,7 +49,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   }, [currentDate]);
 
   const dayTasks = tasks.filter(
-    (t) => t.scheduled_date === dateStr && (t.status === "scheduled" || t.status === "inbox")
+    (t) => t.scheduled_date === dateStr && t.status === "scheduled"
   );
 
   const completedTasks = tasks.filter(
