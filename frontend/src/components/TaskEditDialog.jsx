@@ -75,6 +75,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
       priority,
       scheduled_date: formData.scheduled_date,
       scheduled_time: formData.scheduled_time,
+      duration: parseInt(formData.duration),
       status: formData.scheduled_date ? "scheduled" : "inbox",
     });
     onOpenChange(false);
