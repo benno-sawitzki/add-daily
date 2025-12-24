@@ -48,7 +48,8 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     recognition.onerror = (event) => {
       console.error("Speech recognition error:", event.error);
       if (event.error === "not-allowed") {
-        setError("Microphone access denied. Please allow microphone access.");
+        setError("Microphone access denied. Use text input instead.");
+        setUseTextInput(true);
       } else {
         setError(`Error: ${event.error}`);
       }
