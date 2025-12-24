@@ -224,11 +224,14 @@ function App() {
       <Toaster 
         position="top-right" 
         richColors 
-        duration={2000}
+        duration={1500}
+        gap={8}
         toastOptions={{
           style: {
-            padding: '12px 16px',
-            fontSize: '14px',
+            padding: '10px 14px',
+            fontSize: '13px',
+            minWidth: 'auto',
+            maxWidth: '280px',
           },
         }}
       />
