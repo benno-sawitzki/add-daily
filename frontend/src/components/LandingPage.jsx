@@ -416,7 +416,7 @@ const LandingPage = () => {
                     <Star key={i} className="w-5 h-5 fill-yellow-400 text-yellow-400" />
                   ))}
                 </div>
-                <p className="text-white/80 mb-6 leading-relaxed">"{testimonial.quote}"</p>
+                <p className="text-white/80 mb-6 leading-relaxed">&ldquo;{testimonial.quote}&rdquo;</p>
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-sm font-medium">
                     {testimonial.avatar}
