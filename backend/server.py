@@ -472,7 +472,7 @@ async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
 
 # Voice processing - Queue mode (returns tasks for review, doesn't save yet)
 @api_router.post("/tasks/process-voice-queue")
-async def process_voice_queue(voice_input: VoiceInput):
+async def process_voice_queue(voice_input: VoiceInput, user: dict = Depends(get_current_user)):
     """Process voice transcript and return tasks for review (not saved yet)"""
     try:
         result = await get_ai_response(
@@ -519,7 +519,7 @@ class PushToCalendarRequest(BaseModel):
 
 # Push tasks to inbox
 @api_router.post("/tasks/push-to-inbox")
-async def push_to_inbox(request: PushToCalendarRequest):
+async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get_current_user)):
     """Save tasks to inbox (not scheduled)"""
     try:
         created_tasks = []
@@ -527,6 +527,7 @@ async def push_to_inbox(request: PushToCalendarRequest):
         for task_data in request.tasks:
             task = Task(
                 id=task_data.get("id", str(uuid.uuid4())),
+                user_id=user["id"],
                 title=task_data.get("title", "Untitled Task"),
                 description=task_data.get("description", ""),
                 urgency=task_data.get("urgency", 2),
