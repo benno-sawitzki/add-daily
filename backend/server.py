@@ -698,85 +698,11 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Voice processing (legacy - direct to calendar)
-@api_router.post("/tasks/process-voice")
-async def process_voice(voice_input: VoiceInput):
-    """Process voice transcript and extract/prioritize tasks, auto-schedule urgent ones"""
-    try:
-        result = await get_ai_response(
-            voice_input.transcript,
-            voice_input.provider,
-            voice_input.model
-        )
-        
-        # Get current time for scheduling
-        now = datetime.now(timezone.utc)
-        
-        # Create tasks in database
-        created_tasks = []
-        for task_data in result.get("tasks", []):
-            task = Task(
-                title=task_data.get("title", "Untitled Task"),
-                description=task_data.get("description", ""),
-                urgency=task_data.get("urgency", 2),
-                importance=task_data.get("importance", 2),
-                priority=task_data.get("priority", 2)
-            )
-            created_tasks.append(task)
-        
-        # Sort tasks by priority (highest first) for scheduling
-        created_tasks.sort(key=lambda t: t.priority, reverse=True)
-        
-        # Auto-schedule tasks based on urgency
-        # Start scheduling 1 hour from now
-        schedule_hour = now.hour + 1
-        today = now.strftime("%Y-%m-%d")
-        
-        # Get tomorrow's date for overflow
-        tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        for i, task in enumerate(created_tasks):
-            # Calculate time slot: urgent tasks (priority 3-4) get scheduled today
-            # Less urgent tasks (priority 1-2) stay in inbox
-            if task.priority >= 3:
-                # Schedule urgent/important tasks
-                task_hour = schedule_hour + i
-                
-                if task_hour >= 22:  # Don't schedule after 10 PM
-                    # Move to tomorrow morning
-                    task.scheduled_date = tomorrow
-                    task_hour = 9 + (task_hour - 22)
-                else:
-                    task.scheduled_date = today
-                
-                task.scheduled_time = f"{task_hour:02d}:00"
-                task.status = "scheduled"
-            # Lower priority tasks stay in inbox (status="inbox")
-            
-            # Save to database
-            doc = task.model_dump()
-            await db.tasks.insert_one(doc)
-        
-        # Count scheduled vs inbox
-        scheduled_count = sum(1 for t in created_tasks if t.status == "scheduled")
-        inbox_count = len(created_tasks) - scheduled_count
-        
-        summary_parts = []
-        if scheduled_count > 0:
-            summary_parts.append(f"{scheduled_count} urgent task(s) scheduled")
-        if inbox_count > 0:
-            summary_parts.append(f"{inbox_count} task(s) added to inbox")
-        
-        return {
-            "success": True,
-            "tasks": [t.model_dump() for t in created_tasks],
-            "summary": ", ".join(summary_parts) if summary_parts else "No tasks found",
-            "scheduled_count": scheduled_count,
-            "should_show_calendar": scheduled_count > 0
-        }
-    except Exception as e:
-        logger.error(f"Error processing voice: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+# Voice processing (legacy - disabled, use /tasks/process-voice-queue instead)
+# @api_router.post("/tasks/process-voice")
+# async def process_voice(voice_input: VoiceInput):
+#     """Legacy endpoint - deprecated"""
+#     pass
 
 # Settings
 @api_router.get("/settings", response_model=Settings)
