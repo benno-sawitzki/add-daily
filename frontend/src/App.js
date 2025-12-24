@@ -22,6 +22,8 @@ import {
   ChevronDown,
   Brain,
   Sparkles,
+  RefreshCw,
+  Unlink,
 } from "lucide-react";
 import TaskInbox from "@/components/TaskInbox";
 import WeeklyCalendar from "@/components/WeeklyCalendar";
