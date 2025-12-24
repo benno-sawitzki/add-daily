@@ -107,39 +107,67 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const handleDragStart = (e, task) => {
     if (resizing) return;
     dragTaskRef.current = task;
+    setDraggingTask(task);
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("taskId", task.id);
+    
+    // Make the default drag image invisible
+    const img = new Image();
+    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+    e.dataTransfer.setDragImage(img, 0, 0);
   };
 
   const handleDragEnd = () => {
     dragTaskRef.current = null;
-    setDropTarget(null);
+    setDraggingTask(null);
+    setDragPosition(null);
   };
 
-  const handleDragOver = (e, dateStr, time) => {
+  const handleCalendarDragOver = (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
-    setDropTarget(`${dateStr}|${time}`);
+    
+    if (!calendarRef.current || !draggingTask) return;
+    
+    const rect = calendarRef.current.getBoundingClientRect();
+    const scrollTop = calendarRef.current.scrollTop;
+    
+    // Calculate position relative to calendar
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top + scrollTop;
+    
+    // Calculate which day column (skip the time label column which is 70px)
+    const columnWidth = (rect.width - 70) / 7;
+    const dayIndex = Math.floor((x - 70) / columnWidth);
+    
+    // Calculate which time slot
+    const slotIndex = Math.floor(y / SLOT_HEIGHT);
+    
+    if (dayIndex >= 0 && dayIndex < 7 && slotIndex >= 0 && slotIndex < TIME_SLOTS.length) {
+      setDragPosition({
+        dayIndex,
+        slotIndex,
+        time: TIME_SLOTS[slotIndex],
+        date: format(weekDays[dayIndex], "yyyy-MM-dd")
+      });
+    }
   };
 
-  const handleDragLeave = () => {
-    setDropTarget(null);
-  };
-
-  const handleDrop = (e, dateStr, time) => {
+  const handleCalendarDrop = (e) => {
     e.preventDefault();
     const taskId = e.dataTransfer.getData("taskId");
     
-    if (taskId) {
+    if (taskId && dragPosition) {
       onUpdateTask(taskId, {
-        scheduled_date: dateStr,
-        scheduled_time: time,
+        scheduled_date: dragPosition.date,
+        scheduled_time: dragPosition.time,
         status: "scheduled",
       });
     }
     
     dragTaskRef.current = null;
-    setDropTarget(null);
+    setDraggingTask(null);
+    setDragPosition(null);
   };
 
   const handleComplete = (e, taskId) => {
