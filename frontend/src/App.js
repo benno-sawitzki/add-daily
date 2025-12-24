@@ -330,6 +330,14 @@ function App() {
               onDeleteTask={deleteTask}
             />
           </TabsContent>
+
+          <TabsContent value="completed" data-testid="completed-view">
+            <CompletedTasks
+              tasks={completedTasks}
+              onRestoreTask={updateTask}
+              onDeleteTask={deleteTask}
+            />
+          </TabsContent>
         </Tabs>
       </main>
 
