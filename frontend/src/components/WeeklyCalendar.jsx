@@ -476,6 +476,8 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                     >
                       {slotTasks.map((task) => {
                         const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+                        // Debug: log task priority and color
+                        console.log(`Task "${task.title}" priority=${task.priority} colors=${colors}`);
                         const duration = task.duration || 30;
                         const slots = duration / 30;
                         const taskHeight = slots * SLOT_HEIGHT - 4;
