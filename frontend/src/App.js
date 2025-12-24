@@ -38,6 +38,9 @@ const AI_MODELS = {
     { id: "gpt-5.2", name: "GPT-5.2", icon: "sparkles" },
     { id: "gpt-4o", name: "GPT-4o", icon: "sparkles" },
   ],
+  anthropic: [
+    { id: "claude-sonnet-4-20250514", name: "Claude Sonnet 4", icon: "brain" },
+  ],
   gemini: [
     { id: "gemini-3-flash-preview", name: "Gemini 3 Flash", icon: "zap" },
   ],
