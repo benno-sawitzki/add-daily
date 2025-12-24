@@ -296,6 +296,15 @@ function App() {
               <CalendarDays className="w-4 h-4" />
               Daily
             </TabsTrigger>
+            <TabsTrigger value="completed" className="gap-2" data-testid="tab-completed">
+              <CheckCircle2 className="w-4 h-4" />
+              Done
+              {completedTasks.length > 0 && (
+                <span className="ml-1 px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-500 rounded-full">
+                  {completedTasks.length}
+                </span>
+              )}
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="inbox" data-testid="inbox-view">
