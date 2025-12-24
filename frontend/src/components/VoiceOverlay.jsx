@@ -33,7 +33,10 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
 
     const centerX = size / 2;
     const centerY = size / 2;
-    const baseRadius = size / 2 - 35; // Smaller base to allow more expansion room
+    const baseRadius = size / 2 - 35; // Base radius for the ring
+    // Limit maximum expansion to prevent clipping (container is 350px, canvas is 200px)
+    // Max radius should be ~150px (75px from center) to stay within 350px container
+    const maxRadius = 150;
 
     const draw = () => {
       const now = Date.now();
@@ -68,7 +71,9 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
       // === Outer glow layer (dramatic expansion) ===
       if (isRecording || notRecordingBreath > 0) {
         const glowIntensity = Math.max(glowLevel, notRecordingBreath * 0.1);
-        const outerGlowRadius = baseRadius + 15 + glowLevel * 35 + idleBreathAmount + notRecordingBreath;
+        let outerGlowRadius = baseRadius + 15 + glowLevel * 35 + idleBreathAmount + notRecordingBreath;
+        // Clamp to max radius to prevent clipping
+        outerGlowRadius = Math.min(outerGlowRadius, maxRadius - 10);
         const outerGlow = ctx.createRadialGradient(
           centerX, centerY, baseRadius,
           centerX, centerY, outerGlowRadius + 20
@@ -80,14 +85,16 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
         outerGlow.addColorStop(1, `rgba(244, 63, 94, 0)`);
         
         ctx.beginPath();
-        ctx.arc(centerX, centerY, outerGlowRadius + 20, 0, Math.PI * 2);
+        ctx.arc(centerX, centerY, Math.min(outerGlowRadius + 20, maxRadius), 0, Math.PI * 2);
         ctx.fillStyle = outerGlow;
         ctx.fill();
       }
 
       // === Secondary glow ring (mid layer) ===
       if (isRecording && glowLevel > 0.02) {
-        const midGlowRadius = baseRadius + 8 + glowLevel * 25;
+        let midGlowRadius = baseRadius + 8 + glowLevel * 25;
+        // Clamp to max radius to prevent clipping
+        midGlowRadius = Math.min(midGlowRadius, maxRadius - 5);
         ctx.beginPath();
         ctx.arc(centerX, centerY, midGlowRadius, 0, Math.PI * 2);
         ctx.strokeStyle = `rgba(244, 63, 94, ${glowLevel * 0.35})`;
@@ -104,7 +111,8 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
       // With boosted level, normal speech (~0.3 raw → ~0.55 boosted) gives +15-18px
       // Loud speech (~0.7 raw → ~0.84 boosted) gives +25-28px
       const radiusExpansion = currentLevel * 32 + idleBreathAmount + notRecordingBreath;
-      const ringRadius = baseRadius + radiusExpansion;
+      // Clamp ring radius to prevent clipping beyond container
+      const ringRadius = Math.min(baseRadius + radiusExpansion, maxRadius);
       
       // Opacity ramps clearly with level
       const ringAlpha = isRecording 
@@ -162,13 +170,11 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
       style={{ 
         width: size, 
         height: size,
-        // Center the canvas but allow it to overflow the container
+        // Center the canvas within the larger container
         position: 'absolute',
         top: '50%',
         left: '50%',
-        transform: 'translate(-50%, -50%)',
-        // Ensure no clipping
-        overflow: 'visible'
+        transform: 'translate(-50%, -50%)'
       }}
       className="pointer-events-none"
     />
@@ -541,14 +547,14 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         ) : (
           <>
             {/* VU Meter + Record Button Container */}
-            {/* Increased size and overflow visible to prevent clipping of expanding rings */}
-            {/* Container is 450px to accommodate max ring expansion (glow can reach ~470px diameter) */}
-            <div className="relative mb-8 flex items-center justify-center" style={{ width: 450, height: 450, overflow: 'visible' }}>
+            {/* Container is larger than VU meter to prevent clipping of expanding rings */}
+            {/* VU meter is 200px, container is 350px to allow ~75px expansion on each side */}
+            <div className="relative mb-8 flex items-center justify-center" style={{ width: 350, height: 350, overflow: 'hidden' }}>
               {/* VU Meter Ring */}
               <VUMeterRing 
                 level={audioLevel} 
                 isRecording={isRecording} 
-                size={450}
+                size={200}
               />
 
               {/* Record Button */}
