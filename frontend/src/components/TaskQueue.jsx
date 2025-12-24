@@ -236,6 +236,29 @@ export default function TaskQueue({
                     </Select>
                   </div>
 
+                  {/* Date Picker */}
+                  <div className="flex-shrink-0">
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <Button variant="outline" className="w-28 h-9 justify-start text-left font-normal">
+                          <CalendarIcon className="w-3 h-3 mr-1" />
+                          {task.scheduled_date 
+                            ? format(parseISO(task.scheduled_date), "MMM d")
+                            : "Today"
+                          }
+                        </Button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="end">
+                        <Calendar
+                          mode="single"
+                          selected={task.scheduled_date ? parseISO(task.scheduled_date) : new Date()}
+                          onSelect={(date) => handleDateChange(task.id, date)}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                  </div>
+
                   {/* Delete Button */}
                   <Button
                     variant="ghost"
