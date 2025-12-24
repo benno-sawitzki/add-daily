@@ -43,7 +43,29 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     return () => clearInterval(timer);
   }, []);
 
-  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+  // Auto-scroll to current time on mount (with 1 hour buffer)
+  useEffect(() => {
+    if (calendarRef.current) {
+      const now = new Date();
+      const currentHour = now.getHours();
+      const currentMin = now.getMinutes();
+      
+      // Calculate scroll position: current time minus 1 hour buffer
+      // Each slot is SLOT_HEIGHT pixels, 2 slots per hour
+      const bufferHours = 1;
+      const targetHour = Math.max(6, currentHour - bufferHours); // Don't scroll above 6 AM
+      const slotsFromTop = (targetHour - 6) * 2 + Math.floor(currentMin / 30);
+      const scrollPosition = Math.max(0, slotsFromTop * SLOT_HEIGHT);
+      
+      // Smooth scroll to position
+      calendarRef.current.scrollTo({
+        top: scrollPosition,
+        behavior: "smooth"
+      });
+    }
+  }, []); // Only run on mount
+
+  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1));
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const scheduledTasks = tasks.filter((t) => t.status === "scheduled" && t.scheduled_date);
