@@ -50,7 +50,9 @@ const AI_MODELS = {
   ],
 };
 
-function App() {
+function MainApp() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [tasks, setTasks] = useState([]);
   const [activeView, setActiveView] = useState("inbox");
   const [isVoiceActive, setIsVoiceActive] = useState(false);
