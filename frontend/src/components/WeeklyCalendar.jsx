@@ -356,11 +356,6 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                           >
                             <div className="p-1.5 h-full flex flex-col overflow-hidden">
                               <span className="truncate flex-shrink-0 block">{task.title}</span>
-                              {duration > 30 && (
-                                <span className="text-[10px] opacity-70 mt-0.5 flex-shrink-0">
-                                  {duration} min
-                                </span>
-                              )}
                               <div className="flex-1" />
                               <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 flex-shrink-0">
                                 <button
