@@ -112,7 +112,7 @@ export default function TaskQueue({
   };
 
   const getTotalDuration = () => {
-    return visualTasks.reduce((sum, task) => sum + (task.duration || 30), 0);
+    return tasks.reduce((sum, task) => sum + (task.duration || 30), 0);
   };
 
   const formatDuration = (minutes) => {
@@ -123,7 +123,26 @@ export default function TaskQueue({
     return `${hours}h ${mins}m`;
   };
 
-  if (visualTasks.length === 0) return null;
+  // Calculate transform for visual slot opening effect
+  const getTransform = (index) => {
+    if (draggedIndex === null || overIndex === null) return "";
+    if (index === draggedIndex) return "";
+    
+    if (draggedIndex < overIndex) {
+      // Dragging down: items between draggedIndex and overIndex shift up
+      if (index > draggedIndex && index <= overIndex) {
+        return `translateY(-${ITEM_HEIGHT}px)`;
+      }
+    } else {
+      // Dragging up: items between overIndex and draggedIndex shift down
+      if (index >= overIndex && index < draggedIndex) {
+        return `translateY(${ITEM_HEIGHT}px)`;
+      }
+    }
+    return "";
+  };
+
+  if (tasks.length === 0) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center p-4" data-testid="task-queue">
