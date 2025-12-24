@@ -486,6 +486,95 @@ async def transcribe_audio(audio: UploadFile = File(...)):
                 pass
         raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
+
+# iCal Export endpoint
+from fastapi.responses import Response
+
+@api_router.get("/tasks/export/ical")
+async def export_ical():
+    """Export scheduled tasks as iCal (.ics) file"""
+    try:
+        # Fetch all scheduled tasks
+        tasks = await db.tasks.find(
+            {"status": "scheduled", "scheduled_date": {"$ne": None}},
+            {"_id": 0}
+        ).to_list(1000)
+        
+        # Generate iCal content
+        ical_lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//ADD Daily//Task Manager//EN",
+            "CALSCALE:GREGORIAN",
+            "METHOD:PUBLISH",
+            "X-WR-CALNAME:ADD Daily Tasks",
+        ]
+        
+        for task in tasks:
+            if not task.get("scheduled_date"):
+                continue
+                
+            # Parse date and time
+            date_str = task["scheduled_date"].replace("-", "")
+            time_str = task.get("scheduled_time", "09:00").replace(":", "") + "00"
+            
+            # Calculate end time based on duration
+            duration_mins = task.get("duration", 30)
+            start_hour = int(task.get("scheduled_time", "09:00").split(":")[0])
+            start_min = int(task.get("scheduled_time", "09:00").split(":")[1])
+            
+            end_min = start_min + duration_mins
+            end_hour = start_hour
+            while end_min >= 60:
+                end_min -= 60
+                end_hour += 1
+            
+            end_time_str = f"{end_hour:02d}{end_min:02d}00"
+            
+            # Create unique ID
+            uid = task.get("id", str(uuid.uuid4()))
+            
+            # Escape special characters in text
+            title = task.get("title", "Untitled").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+            description = task.get("description", "").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
+            
+            # Priority mapping (iCal: 1=high, 5=medium, 9=low)
+            priority_map = {4: 1, 3: 3, 2: 5, 1: 9}
+            ical_priority = priority_map.get(task.get("priority", 2), 5)
+            
+            # Add event
+            ical_lines.extend([
+                "BEGIN:VEVENT",
+                f"UID:{uid}@adddaily.app",
+                f"DTSTAMP:{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}",
+                f"DTSTART:{date_str}T{time_str}",
+                f"DTEND:{date_str}T{end_time_str}",
+                f"SUMMARY:{title}",
+                f"DESCRIPTION:{description}",
+                f"PRIORITY:{ical_priority}",
+                "STATUS:CONFIRMED",
+                "END:VEVENT",
+            ])
+        
+        ical_lines.append("END:VCALENDAR")
+        
+        # Join with CRLF as per iCal spec
+        ical_content = "\r\n".join(ical_lines)
+        
+        # Return as downloadable file
+        return Response(
+            content=ical_content,
+            media_type="text/calendar",
+            headers={
+                "Content-Disposition": "attachment; filename=add-daily-tasks.ics"
+            }
+        )
+        
+    except Exception as e:
+        logger.error(f"Error exporting iCal: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # Include the router in the main app
 app.include_router(api_router)
 
