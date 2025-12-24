@@ -120,7 +120,7 @@ export default function TaskQueue({
   };
 
   const getTotalDuration = () => {
-    return tasks.reduce((sum, task) => sum + (task.duration || 30), 0);
+    return visualTasks.reduce((sum, task) => sum + (task.duration || 30), 0);
   };
 
   const formatDuration = (minutes) => {
@@ -131,28 +131,7 @@ export default function TaskQueue({
     return `${hours}h ${mins}m`;
   };
 
-  // Calculate transform for each item
-  const getTransform = (index) => {
-    if (isReordering) return ""; // No transforms during reorder
-    if (draggedIndex === null || overIndex === null) return "";
-    if (index === draggedIndex) return "";
-    
-    // Items between draggedIndex and overIndex need to shift
-    if (draggedIndex < overIndex) {
-      // Dragging down: items in between shift up
-      if (index > draggedIndex && index <= overIndex) {
-        return "translateY(-68px)";
-      }
-    } else {
-      // Dragging up: items in between shift down
-      if (index < draggedIndex && index >= overIndex) {
-        return "translateY(68px)";
-      }
-    }
-    return "";
-  };
-
-  if (tasks.length === 0) return null;
+  if (visualTasks.length === 0) return null;
 
   return (
     <div className="fixed inset-0 z-50 bg-background/95 backdrop-blur-sm flex items-center justify-center p-4" data-testid="task-queue">
