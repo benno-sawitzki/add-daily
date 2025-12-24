@@ -208,13 +208,15 @@ function App() {
   const completedTasks = tasks.filter((t) => t.status === "completed");
 
   const getModelDisplayName = () => {
-    const allModels = [...AI_MODELS.openai, ...AI_MODELS.gemini];
+    const allModels = [...AI_MODELS.openai, ...AI_MODELS.anthropic, ...AI_MODELS.gemini];
     const model = allModels.find((m) => m.id === settings.ai_model);
     return model?.name || settings.ai_model;
   };
 
   const getModelColor = () => {
-    return settings.ai_provider === "openai" ? "text-[#10A37F]" : "text-[#4E80EE]";
+    if (settings.ai_provider === "openai") return "text-[#10A37F]";
+    if (settings.ai_provider === "anthropic") return "text-[#D97706]";
+    return "text-[#4E80EE]";
   };
 
   return (
