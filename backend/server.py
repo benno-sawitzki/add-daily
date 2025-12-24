@@ -781,22 +781,29 @@ async def process_voice(voice_input: VoiceInput):
 # Settings
 @api_router.get("/settings", response_model=Settings)
 async def get_settings(user: dict = Depends(get_current_user)):
-    settings = await db.settings.find_one({"id": f"settings_{user['id']}"}, {"_id": 0})
-    if not settings:
-        default_settings = Settings(id=f"settings_{user['id']}")
-        await db.settings.insert_one(default_settings.model_dump())
-        return default_settings
-    return settings
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("SELECT id, ai_provider, ai_model FROM settings WHERE id = $1", f"settings_{user['id']}")
+        if not row:
+            # Create default settings
+            await conn.execute(
+                "INSERT INTO settings (id, ai_provider, ai_model) VALUES ($1, $2, $3)",
+                f"settings_{user['id']}", "openai", "gpt-5.2"
+            )
+            return Settings(id=f"settings_{user['id']}")
+    return dict(row)
 
 @api_router.patch("/settings", response_model=Settings)
 async def update_settings(settings_update: SettingsUpdate, user: dict = Depends(get_current_user)):
-    await db.settings.update_one(
-        {"id": f"settings_{user['id']}"},
-        {"$set": settings_update.model_dump()},
-        upsert=True
-    )
-    settings = await db.settings.find_one({"id": f"settings_{user['id']}"}, {"_id": 0})
-    return settings
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO settings (id, ai_provider, ai_model) VALUES ($1, $2, $3)
+               ON CONFLICT (id) DO UPDATE SET ai_provider = $2, ai_model = $3""",
+            f"settings_{user['id']}", settings_update.ai_provider, settings_update.ai_model
+        )
+        row = await conn.fetchrow("SELECT id, ai_provider, ai_model FROM settings WHERE id = $1", f"settings_{user['id']}")
+    return dict(row)
 
 # Whisper Speech-to-Text endpoint
 @api_router.post("/transcribe")
