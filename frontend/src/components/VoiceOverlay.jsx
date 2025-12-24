@@ -241,10 +241,6 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [useWhisper, setUseWhisper] = useState(false);
   const [audioStream, setAudioStream] = useState(null);
   
-  // Demo mode state
-  const [demoMode, setDemoMode] = useState(false);
-  const [demoLevel, setDemoLevel] = useState(0);
-  
   const recognitionRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -252,10 +248,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const streamRef = useRef(null);
 
   // Get real audio level from mic
-  const realAudioLevel = useAudioLevel(audioStream, isRecording);
-  
-  // Use demo level when in demo mode, otherwise use real audio level
-  const audioLevel = demoMode ? demoLevel : realAudioLevel;
+  const audioLevel = useAudioLevel(audioStream, isRecording);
 
   // Initialize browser speech recognition
   useEffect(() => {
