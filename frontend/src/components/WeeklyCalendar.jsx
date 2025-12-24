@@ -26,7 +26,8 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [resizing, setResizing] = useState(null);
   const [draggingTask, setDraggingTask] = useState(null);
-  const [dragPosition, setDragPosition] = useState(null);
+  const [dragPosition, setDragPosition] = useState(null); // Snapped position for drop
+  const [cursorPosition, setCursorPosition] = useState(null); // Smooth cursor follow
   const calendarRef = useRef(null);
   const dragTaskRef = useRef(null);
   const resizeStartY = useRef(null);
