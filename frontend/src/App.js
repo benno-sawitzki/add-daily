@@ -164,6 +164,24 @@ function App() {
     }
   };
 
+  // Push queued tasks to inbox
+  const pushToInbox = async () => {
+    try {
+      const response = await axios.post(`${API}/tasks/push-to-inbox`, {
+        tasks: queuedTasks,
+      });
+      
+      await fetchTasks();
+      setShowTaskQueue(false);
+      setQueuedTasks([]);
+      setActiveView("inbox");
+      toast.success(`${queuedTasks.length} tasks added to inbox!`);
+    } catch (error) {
+      console.error("Error pushing to inbox:", error);
+      toast.error("Failed to push tasks to inbox");
+    }
+  };
+
   const cancelTaskQueue = () => {
     setShowTaskQueue(false);
     setQueuedTasks([]);
