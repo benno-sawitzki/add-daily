@@ -43,6 +43,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
     importance: "2",
     scheduled_date: null,
     scheduled_time: "",
+    duration: "30",
     status: "inbox",
   });
 
@@ -55,6 +56,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
         importance: String(task.importance || 2),
         scheduled_date: task.scheduled_date || null,
         scheduled_time: task.scheduled_time || "",
+        duration: String(task.duration || 30),
         status: task.status || "inbox",
       });
     }
