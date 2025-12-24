@@ -35,8 +35,28 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
   const sortedTasks = [...tasks].sort((a, b) => b.priority - a.priority);
 
   const handleScheduleTask = (taskId, date) => {
+    // Set a default time (next half hour slot)
+    const now = new Date();
+    let hours = now.getHours();
+    let minutes = now.getMinutes();
+    
+    // Round up to next 30 min slot
+    if (minutes > 0 && minutes <= 30) {
+      minutes = 30;
+    } else if (minutes > 30) {
+      minutes = 0;
+      hours += 1;
+    }
+    
+    // Clamp to valid hours (6 AM - 10 PM)
+    if (hours < 6) hours = 9;
+    if (hours > 22) hours = 9;
+    
+    const defaultTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+    
     onUpdateTask(taskId, {
       scheduled_date: date,
+      scheduled_time: defaultTime,
       status: "scheduled",
     });
   };
