@@ -545,11 +545,15 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                 disabled={isLoading || isTranscribing}
                 className={`relative w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
                   isRecording
-                    ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)]"
+                    ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)] ring-4 ring-rose-500/30"
                     : isTranscribing
                     ? "bg-card border-2 border-primary/50"
                     : "bg-card border-2 border-border/50 hover:border-primary/50 hover:bg-card/80"
                 }`}
+                style={{
+                  // Ensure the button background fully covers the content
+                  boxShadow: isRecording ? '0 0 40px rgba(244,63,94,0.4), inset 0 0 20px rgba(255,255,255,0.1)' : undefined
+                }}
                 whileHover={!isRecording && !isTranscribing ? { scale: 1.03 } : {}}
                 whileTap={{ scale: 0.97 }}
                 data-testid="voice-orb"
@@ -563,7 +567,9 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                   </>
                 ) : isRecording ? (
                   <>
-                    <Square className="w-6 h-6 text-white fill-white" />
+                    <div className="w-6 h-6 bg-white rounded-sm flex items-center justify-center">
+                      <Square className="w-4 h-4 text-rose-500 fill-rose-500" />
+                    </div>
                     <span className="text-white text-sm mt-1.5 font-mono">{formatTime(recordingTime)}</span>
                   </>
                 ) : (
