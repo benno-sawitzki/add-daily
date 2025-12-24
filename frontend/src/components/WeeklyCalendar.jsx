@@ -22,7 +22,16 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [dropTarget, setDropTarget] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
+  const [currentTime, setCurrentTime] = useState(new Date());
   const dragTaskRef = useRef(null);
+
+  // Update current time every minute
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(new Date());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
