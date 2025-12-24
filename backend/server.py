@@ -412,37 +412,36 @@ async def google_auth(auth_data: GoogleAuthRequest):
     name = google_user.get("name", "")
     avatar_url = google_user.get("picture")
     
-    # Check if user exists by google_id or email
-    existing_user = await db.users.find_one({
-        "$or": [{"google_id": google_id}, {"email": email}]
-    })
-    
-    if existing_user:
-        # Update Google info if needed
-        update_data = {"google_id": google_id}
-        if avatar_url:
-            update_data["avatar_url"] = avatar_url
-        if name and not existing_user.get("name"):
-            update_data["name"] = name
-            
-        await db.users.update_one({"id": existing_user["id"]}, {"$set": update_data})
-        user_id = existing_user["id"]
-        user_email = existing_user["email"]
-        user_name = existing_user.get("name") or name
-        user_avatar = avatar_url or existing_user.get("avatar_url")
-    else:
-        # Create new user
-        new_user = User(
-            email=email,
-            name=name,
-            google_id=google_id,
-            avatar_url=avatar_url
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Check if user exists by google_id or email
+        existing_user = await conn.fetchrow(
+            "SELECT id, email, name, avatar_url FROM users WHERE google_id = $1 OR email = $2",
+            google_id, email
         )
-        await db.users.insert_one(new_user.model_dump())
-        user_id = new_user.id
-        user_email = email
-        user_name = name
-        user_avatar = avatar_url
+        
+        if existing_user:
+            # Update Google info
+            await conn.execute(
+                "UPDATE users SET google_id = $1, avatar_url = COALESCE($2, avatar_url), name = COALESCE(NULLIF(name, ''), $3) WHERE id = $4",
+                google_id, avatar_url, name, existing_user["id"]
+            )
+            user_id = existing_user["id"]
+            user_email = existing_user["email"]
+            user_name = existing_user["name"] or name
+            user_avatar = avatar_url or existing_user["avatar_url"]
+        else:
+            # Create new user
+            user_id = str(uuid.uuid4())
+            created_at = datetime.now(timezone.utc)
+            await conn.execute(
+                """INSERT INTO users (id, email, name, google_id, avatar_url, created_at) 
+                   VALUES ($1, $2, $3, $4, $5, $6)""",
+                user_id, email, name, google_id, avatar_url, created_at
+            )
+            user_email = email
+            user_name = name
+            user_avatar = avatar_url
     
     # Generate JWT token
     token = create_jwt_token(user_id, user_email)
