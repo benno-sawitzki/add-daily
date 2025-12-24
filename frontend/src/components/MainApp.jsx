@@ -89,22 +89,45 @@ function MainApp() {
   }, [fetchTasks, fetchSettings]);
 
   const updateTask = async (taskId, updates) => {
+    // Optimistic update: update UI immediately for better UX
+    setTasks(prevTasks => 
+      prevTasks.map(task => 
+        task.id === taskId ? { ...task, ...updates } : task
+      )
+    );
+    
     try {
-      await axios.patch(`${API}/tasks/${taskId}`, updates);
-      await fetchTasks();
-      toast.success("Task updated");
+      const response = await axios.patch(`${API}/tasks/${taskId}`, updates);
+      // Update with server response (more accurate, includes computed fields)
+      setTasks(prevTasks => 
+        prevTasks.map(task => 
+          task.id === taskId ? response.data : task
+        )
+      );
+      // Don't show toast for drag-and-drop updates (too noisy)
+      // toast.success("Task updated");
     } catch (error) {
+      // Revert optimistic update on error
+      await fetchTasks();
       console.error("Error updating task:", error);
       toast.error("Failed to update task");
     }
   };
 
   const deleteTask = async (taskId) => {
+    // Optimistic update: remove from UI immediately
+    const deletedTask = tasks.find(t => t.id === taskId);
+    setTasks(prevTasks => prevTasks.filter(t => t.id !== taskId));
+    
     try {
       await axios.delete(`${API}/tasks/${taskId}`);
-      await fetchTasks();
-      toast.success("Task deleted");
+      // Don't show toast for every delete (too noisy)
+      // toast.success("Task deleted");
     } catch (error) {
+      // Revert optimistic update on error
+      if (deletedTask) {
+        setTasks(prevTasks => [...prevTasks, deletedTask]);
+      }
       console.error("Error deleting task:", error);
       toast.error("Failed to delete task");
     }
@@ -162,38 +185,94 @@ function MainApp() {
 
   // Push queued tasks to calendar
   const pushToCalendar = async () => {
+    const taskCount = queuedTasks.length;
+    
+    // Optimistic update: add tasks to UI immediately
+    const optimisticTasks = queuedTasks.map(task => ({
+      ...task,
+      status: "scheduled",
+      user_id: user?.id,
+      created_at: new Date().toISOString()
+    }));
+    setTasks(prevTasks => [...prevTasks, ...optimisticTasks]);
+    setShowTaskQueue(false);
+    setQueuedTasks([]);
+    setActiveView("weekly");
+    
     try {
       const response = await axios.post(`${API}/tasks/push-to-calendar`, {
         tasks: queuedTasks,
       });
       
-      await fetchTasks();
-      setShowTaskQueue(false);
-      setQueuedTasks([]);
-      setActiveView("weekly");
-      toast.success(`${queuedTasks.length} tasks scheduled!`);
+      // Replace optimistic tasks with server response (more accurate, includes scheduling)
+      if (response.data.tasks && response.data.tasks.length > 0) {
+        setTasks(prevTasks => {
+          // Remove optimistic tasks and add server tasks
+          const withoutOptimistic = prevTasks.filter(
+            t => !optimisticTasks.some(ot => ot.id === t.id)
+          );
+          return [...withoutOptimistic, ...response.data.tasks];
+        });
+      }
+      
+      toast.success(`${taskCount} tasks scheduled!`);
     } catch (error) {
+      // Revert optimistic update on error
+      setTasks(prevTasks => 
+        prevTasks.filter(t => !optimisticTasks.some(ot => ot.id === t.id))
+      );
       console.error("Error pushing to calendar:", error);
       const errorMessage = error.response?.data?.detail || error.message || "Failed to push tasks to calendar";
       toast.error(errorMessage);
+      // Restore queue on error
+      setQueuedTasks(queuedTasks);
+      setShowTaskQueue(true);
     }
   };
 
   // Push queued tasks to inbox
   const pushToInbox = async () => {
+    const taskCount = queuedTasks.length;
+    
+    // Optimistic update: add tasks to UI immediately
+    const optimisticTasks = queuedTasks.map(task => ({
+      ...task,
+      status: "inbox",
+      user_id: user?.id,
+      created_at: new Date().toISOString()
+    }));
+    setTasks(prevTasks => [...prevTasks, ...optimisticTasks]);
+    setShowTaskQueue(false);
+    setQueuedTasks([]);
+    setActiveView("inbox");
+    
     try {
       const response = await axios.post(`${API}/tasks/push-to-inbox`, {
         tasks: queuedTasks,
       });
       
-      await fetchTasks();
-      setShowTaskQueue(false);
-      setQueuedTasks([]);
-      setActiveView("inbox");
-      toast.success(`${queuedTasks.length} tasks added to inbox!`);
+      // Replace optimistic tasks with server response (more accurate)
+      if (response.data.tasks && response.data.tasks.length > 0) {
+        setTasks(prevTasks => {
+          // Remove optimistic tasks and add server tasks
+          const withoutOptimistic = prevTasks.filter(
+            t => !optimisticTasks.some(ot => ot.id === t.id)
+          );
+          return [...withoutOptimistic, ...response.data.tasks];
+        });
+      }
+      
+      toast.success(`${taskCount} tasks added to inbox!`);
     } catch (error) {
+      // Revert optimistic update on error
+      setTasks(prevTasks => 
+        prevTasks.filter(t => !optimisticTasks.some(ot => ot.id === t.id))
+      );
       console.error("Error pushing to inbox:", error);
       toast.error("Failed to push tasks to inbox");
+      // Restore queue on error
+      setQueuedTasks(queuedTasks);
+      setShowTaskQueue(true);
     }
   };
 

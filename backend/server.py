@@ -689,23 +689,19 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         where_clause = f"id = ${param_num} AND user_id = ${param_num + 1}"
         values.extend([task_id, user["id"]])
         
-        query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE {where_clause}"
+        # Use RETURNING to get updated row in a single query (much faster)
+        query = f"""UPDATE tasks SET {', '.join(set_clauses)} 
+                    WHERE {where_clause}
+                    RETURNING id, user_id, title, description, priority, urgency, importance, 
+                              scheduled_date::text, scheduled_time, duration, status, created_at::text"""
         
         try:
             logger.info(f"Updating task {task_id} with {len(filtered_data)} fields")
-            result = await conn.execute(query, *values)
+            row = await conn.fetchrow(query, *values)
             
-            if result == "UPDATE 0":
+            if not row:
                 raise HTTPException(status_code=404, detail="Task not found or you don't have permission")
             
-            row = await conn.fetchrow(
-                """SELECT id, user_id, title, description, priority, urgency, importance, 
-                   scheduled_date::text, scheduled_time, duration, status, created_at::text
-                   FROM tasks WHERE id = $1 AND user_id = $2""",
-                task_id, user["id"]
-            )
-            if not row:
-                raise HTTPException(status_code=404, detail="Task not found after update")
             return dict(row)
         except HTTPException:
             raise
@@ -781,26 +777,53 @@ class PushToCalendarRequest(BaseModel):
 async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get_current_user)):
     """Save tasks to inbox (not scheduled)"""
     try:
-        created_tasks = []
+        if not request.tasks:
+            return {"success": True, "tasks": [], "message": "No tasks to add"}
+        
         pool = await get_db_pool()
+        created_at = datetime.now(timezone.utc)
         
         async with pool.acquire() as conn:
-            for task_data in request.tasks:
-                task_id = task_data.get("id", str(uuid.uuid4()))
-                await conn.execute(
-                    """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-                       duration, status, created_at)
-                       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)""",
-                    task_id, user["id"], task_data.get("title", "Untitled Task"),
-                    task_data.get("description", ""), task_data.get("priority", 2),
-                    task_data.get("urgency", 2), task_data.get("importance", 2),
-                    task_data.get("duration", 30), "inbox", datetime.now(timezone.utc)
-                )
-                created_tasks.append({
-                    "id": task_id,
-                    "title": task_data.get("title", "Untitled Task"),
-                    "status": "inbox"
-                })
+            # Use a transaction for atomicity
+            async with conn.transaction():
+                # Build batch insert using VALUES with multiple rows
+                # This is much faster than individual INSERTs
+                values_list = []
+                params = []
+                param_num = 1
+                
+                for task_data in request.tasks:
+                    task_id = task_data.get("id", str(uuid.uuid4()))
+                    values_list.append(
+                        f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
+                        f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
+                        f"${param_num+8}, ${param_num+9}, ${param_num+10})"
+                    )
+                    params.extend([
+                        task_id,
+                        user["id"],
+                        task_data.get("title", "Untitled Task"),
+                        task_data.get("description", ""),
+                        task_data.get("priority", 2),
+                        task_data.get("urgency", 2),
+                        task_data.get("importance", 2),
+                        task_data.get("duration", 30),
+                        "inbox",  # status
+                        created_at
+                    ])
+                    param_num += 10
+                
+                # Single batch INSERT with RETURNING - much faster!
+                query = f"""
+                    INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
+                                     duration, status, created_at)
+                    VALUES {', '.join(values_list)}
+                    RETURNING id, user_id, title, description, priority, urgency, importance, 
+                              scheduled_date::text, scheduled_time, duration, status, created_at::text
+                """
+                
+                rows = await conn.fetch(query, *params)
+                created_tasks = [dict(row) for row in rows]
         
         return {
             "success": True,
@@ -808,8 +831,8 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
             "message": f"{len(created_tasks)} tasks added to inbox"
         }
     except Exception as e:
-        logger.error(f"Error pushing to inbox: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error pushing to inbox: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to push tasks to inbox: {str(e)}")
 
 
 # Push tasks to calendar
