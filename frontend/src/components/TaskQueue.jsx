@@ -47,6 +47,7 @@ export default function TaskQueue({
   const [overIndex, setOverIndex] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
+  const [isReordering, setIsReordering] = useState(false);
 
   const handleDragStart = (e, index) => {
     setDraggedIndex(index);
@@ -63,13 +64,29 @@ export default function TaskQueue({
 
   const handleDragEnd = () => {
     if (draggedIndex !== null && overIndex !== null && draggedIndex !== overIndex) {
+      // Mark as reordering to prevent visual jump
+      setIsReordering(true);
+      
+      // Create new order
       const newTasks = [...tasks];
       const [removed] = newTasks.splice(draggedIndex, 1);
       newTasks.splice(overIndex, 0, removed);
+      
+      // Clear drag state first, then update order
+      setDraggedIndex(null);
+      setOverIndex(null);
+      
+      // Update order synchronously
       onReorder(newTasks);
+      
+      // Clear reordering flag after render
+      requestAnimationFrame(() => {
+        setIsReordering(false);
+      });
+    } else {
+      setDraggedIndex(null);
+      setOverIndex(null);
     }
-    setDraggedIndex(null);
-    setOverIndex(null);
   };
 
   const handleDurationChange = (taskId, duration) => {
