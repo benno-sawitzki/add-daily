@@ -21,6 +21,7 @@ import {
   Inbox,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import TaskEditDialog from "./TaskEditDialog";
 
 const PRIORITY_CONFIG = {
   4: { label: "Critical", color: "text-rose-400", bg: "bg-rose-500/10", border: "border-l-rose-500", icon: AlertCircle },
