@@ -41,7 +41,8 @@ export default function TaskQueue({
   onReorder, 
   onUpdateTask, 
   onDeleteTask, 
-  onPushToCalendar, 
+  onPushToCalendar,
+  onPushToInbox,
   onClose 
 }) {
   const [draggedIndex, setDraggedIndex] = useState(null);
