@@ -60,6 +60,38 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     return dayTasks.filter((t) => t.scheduled_time === time);
   };
 
+  // Calculate position for overlapping tasks
+  const getTaskPosition = (task) => {
+    const [taskHour, taskMin] = task.scheduled_time.split(":").map(Number);
+    const taskStart = taskHour * 60 + taskMin;
+    const taskEnd = taskStart + (task.duration || 30);
+    
+    // Find all tasks that overlap with this task
+    const overlapping = dayTasks.filter((t) => {
+      if (!t.scheduled_time) return false;
+      
+      const [tHour, tMin] = t.scheduled_time.split(":").map(Number);
+      const tStart = tHour * 60 + tMin;
+      const tEnd = tStart + (t.duration || 30);
+      
+      // Check for any overlap
+      return (taskStart < tEnd && taskEnd > tStart);
+    });
+    
+    // Sort by start time, then by id for consistent ordering
+    overlapping.sort((a, b) => {
+      const aTime = a.scheduled_time;
+      const bTime = b.scheduled_time;
+      if (aTime !== bTime) return aTime.localeCompare(bTime);
+      return a.id.localeCompare(b.id);
+    });
+    
+    const index = overlapping.findIndex((t) => t.id === task.id);
+    const total = overlapping.length;
+    
+    return { index, total };
+  };
+
   // Calculate current time position
   const getCurrentTimePosition = () => {
     const hours = currentTime.getHours();
