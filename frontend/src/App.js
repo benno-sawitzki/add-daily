@@ -1,52 +1,293 @@
-import { useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import axios from "axios";
+import { Toaster, toast } from "sonner";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import {
+  Mic,
+  MicOff,
+  Inbox,
+  Calendar,
+  CalendarDays,
+  CheckCircle2,
+  Trash2,
+  Clock,
+  Zap,
+  ChevronDown,
+  Settings,
+  Brain,
+  Sparkles,
+  X,
+} from "lucide-react";
+import TaskInbox from "@/components/TaskInbox";
+import WeeklyCalendar from "@/components/WeeklyCalendar";
+import DailyCalendar from "@/components/DailyCalendar";
+import VoiceOverlay from "@/components/VoiceOverlay";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
+const AI_MODELS = {
+  openai: [
+    { id: "gpt-5.2", name: "GPT-5.2", icon: "sparkles" },
+    { id: "gpt-4o", name: "GPT-4o", icon: "sparkles" },
+  ],
+  gemini: [
+    { id: "gemini-3-flash-preview", name: "Gemini 3 Flash", icon: "zap" },
+  ],
 };
 
 function App() {
+  const [tasks, setTasks] = useState([]);
+  const [activeView, setActiveView] = useState("inbox");
+  const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [settings, setSettings] = useState({
+    ai_provider: "openai",
+    ai_model: "gpt-5.2",
+  });
+  const [isLoading, setIsLoading] = useState(false);
+
+  const fetchTasks = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/tasks`);
+      setTasks(response.data);
+    } catch (error) {
+      console.error("Error fetching tasks:", error);
+      toast.error("Failed to fetch tasks");
+    }
+  }, []);
+
+  const fetchSettings = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API}/settings`);
+      setSettings(response.data);
+    } catch (error) {
+      console.error("Error fetching settings:", error);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTasks();
+    fetchSettings();
+  }, [fetchTasks, fetchSettings]);
+
+  const updateTask = async (taskId, updates) => {
+    try {
+      await axios.patch(`${API}/tasks/${taskId}`, updates);
+      await fetchTasks();
+      toast.success("Task updated");
+    } catch (error) {
+      console.error("Error updating task:", error);
+      toast.error("Failed to update task");
+    }
+  };
+
+  const deleteTask = async (taskId) => {
+    try {
+      await axios.delete(`${API}/tasks/${taskId}`);
+      await fetchTasks();
+      toast.success("Task deleted");
+    } catch (error) {
+      console.error("Error deleting task:", error);
+      toast.error("Failed to delete task");
+    }
+  };
+
+  const processVoiceInput = async (transcript) => {
+    setIsLoading(true);
+    try {
+      const response = await axios.post(`${API}/tasks/process-voice`, {
+        transcript,
+        model: settings.ai_model,
+        provider: settings.ai_provider,
+      });
+      await fetchTasks();
+      toast.success(response.data.summary || "Tasks created!");
+      return response.data;
+    } catch (error) {
+      console.error("Error processing voice:", error);
+      toast.error("Failed to process voice input");
+      throw error;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const updateSettings = async (provider, model) => {
+    try {
+      await axios.patch(`${API}/settings`, {
+        ai_provider: provider,
+        ai_model: model,
+      });
+      setSettings({ ai_provider: provider, ai_model: model });
+      toast.success(`Switched to ${model}`);
+    } catch (error) {
+      console.error("Error updating settings:", error);
+      toast.error("Failed to update settings");
+    }
+  };
+
+  const inboxTasks = tasks.filter((t) => t.status === "inbox");
+  const scheduledTasks = tasks.filter((t) => t.status === "scheduled");
+  const completedTasks = tasks.filter((t) => t.status === "completed");
+
+  const getModelDisplayName = () => {
+    const allModels = [...AI_MODELS.openai, ...AI_MODELS.gemini];
+    const model = allModels.find((m) => m.id === settings.ai_model);
+    return model?.name || settings.ai_model;
+  };
+
+  const getModelColor = () => {
+    return settings.ai_provider === "openai" ? "text-[#10A37F]" : "text-[#4E80EE]";
+  };
+
   return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
+    <div className="app-container" data-testid="app-container">
+      <Toaster position="top-right" richColors />
+      
+      {/* Header */}
+      <header className="border-b border-border/50 bg-card/50 backdrop-blur-xl sticky top-0 z-30" data-testid="app-header">
+        <div className="flex items-center justify-between px-6 py-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
+              <Brain className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold">TaskFlow</h1>
+              <p className="text-sm text-muted-foreground">AI-powered task inbox</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {/* Model Selector */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="gap-2" data-testid="model-selector">
+                  {settings.ai_provider === "openai" ? (
+                    <Sparkles className={`w-4 h-4 ${getModelColor()}`} />
+                  ) : (
+                    <Zap className={`w-4 h-4 ${getModelColor()}`} />
+                  )}
+                  <span className={getModelColor()}>{getModelDisplayName()}</span>
+                  <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuLabel>OpenAI</DropdownMenuLabel>
+                {AI_MODELS.openai.map((model) => (
+                  <DropdownMenuItem
+                    key={model.id}
+                    onClick={() => updateSettings("openai", model.id)}
+                    className="gap-2"
+                    data-testid={`model-option-${model.id}`}
+                  >
+                    <Sparkles className="w-4 h-4 text-[#10A37F]" />
+                    {model.name}
+                    {settings.ai_model === model.id && (
+                      <CheckCircle2 className="w-4 h-4 ml-auto text-primary" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Google</DropdownMenuLabel>
+                {AI_MODELS.gemini.map((model) => (
+                  <DropdownMenuItem
+                    key={model.id}
+                    onClick={() => updateSettings("gemini", model.id)}
+                    className="gap-2"
+                    data-testid={`model-option-${model.id}`}
+                  >
+                    <Zap className="w-4 h-4 text-[#4E80EE]" />
+                    {model.name}
+                    {settings.ai_model === model.id && (
+                      <CheckCircle2 className="w-4 h-4 ml-auto text-primary" />
+                    )}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Voice Button */}
+            <Button
+              onClick={() => setIsVoiceActive(true)}
+              className="gap-2 rounded-full bg-primary hover:bg-primary/90 glow-effect"
+              data-testid="voice-button"
+            >
+              <Mic className="w-4 h-4" />
+              Add Tasks
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 p-6" data-testid="main-content">
+        <Tabs value={activeView} onValueChange={setActiveView} className="w-full">
+          <TabsList className="mb-6 bg-card/50 p-1" data-testid="view-tabs">
+            <TabsTrigger value="inbox" className="gap-2" data-testid="tab-inbox">
+              <Inbox className="w-4 h-4" />
+              Inbox
+              {inboxTasks.length > 0 && (
+                <span className="ml-1 px-2 py-0.5 text-xs bg-primary/20 text-primary rounded-full">
+                  {inboxTasks.length}
+                </span>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="weekly" className="gap-2" data-testid="tab-weekly">
+              <Calendar className="w-4 h-4" />
+              Weekly
+            </TabsTrigger>
+            <TabsTrigger value="daily" className="gap-2" data-testid="tab-daily">
+              <CalendarDays className="w-4 h-4" />
+              Daily
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="inbox" data-testid="inbox-view">
+            <TaskInbox
+              tasks={inboxTasks}
+              onUpdateTask={updateTask}
+              onDeleteTask={deleteTask}
+            />
+          </TabsContent>
+
+          <TabsContent value="weekly" data-testid="weekly-view">
+            <WeeklyCalendar
+              tasks={tasks}
+              onUpdateTask={updateTask}
+              onDeleteTask={deleteTask}
+            />
+          </TabsContent>
+
+          <TabsContent value="daily" data-testid="daily-view">
+            <DailyCalendar
+              tasks={tasks}
+              onUpdateTask={updateTask}
+              onDeleteTask={deleteTask}
+            />
+          </TabsContent>
+        </Tabs>
+      </main>
+
+      {/* Voice Overlay */}
+      {isVoiceActive && (
+        <VoiceOverlay
+          onClose={() => setIsVoiceActive(false)}
+          onProcess={processVoiceInput}
+          isLoading={isLoading}
+        />
+      )}
     </div>
   );
 }
