@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Mic, MicOff, X, Loader2, Waves, Send } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Mic, MicOff, X, Loader2, Waves, Send, Keyboard } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
