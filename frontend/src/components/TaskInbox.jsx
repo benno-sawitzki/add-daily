@@ -80,8 +80,9 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
               transition={{ delay: index * 0.05 }}
             >
               <Card
-                className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all`}
+                className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all cursor-pointer`}
                 data-testid={`task-card-${task.id}`}
+                onClick={() => setEditingTask(task)}
               >
                 <div className="flex items-start gap-4">
                   {/* Priority indicator */}
