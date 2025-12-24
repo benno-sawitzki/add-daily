@@ -264,6 +264,26 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     document.addEventListener("mouseup", handleMouseUp);
   };
 
+  // Format time for display (e.g., "9:00" or "13:30")
+  const formatTimeShort = (timeStr) => {
+    if (!timeStr) return "";
+    const [hours, mins] = timeStr.split(":").map(Number);
+    return `${hours}:${mins.toString().padStart(2, "0")}`;
+  };
+
+  // Calculate end time from start time and duration
+  const getEndTime = (startTime, duration) => {
+    if (!startTime) return "";
+    const [hours, mins] = startTime.split(":").map(Number);
+    let endMins = mins + (duration || 30);
+    let endHours = hours;
+    while (endMins >= 60) {
+      endMins -= 60;
+      endHours += 1;
+    }
+    return `${endHours}:${endMins.toString().padStart(2, "0")}`;
+  };
+
   const handleExportICal = async () => {
     try {
       const response = await fetch(`${BACKEND_URL}/api/tasks/export/ical`);
