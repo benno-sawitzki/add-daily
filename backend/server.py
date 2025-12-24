@@ -198,7 +198,108 @@ async def delete_task(task_id: str):
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted"}
 
-# Voice processing
+# Voice processing - Queue mode (returns tasks for review, doesn't save yet)
+@api_router.post("/tasks/process-voice-queue")
+async def process_voice_queue(voice_input: VoiceInput):
+    """Process voice transcript and return tasks for review (not saved yet)"""
+    try:
+        result = await get_ai_response(
+            voice_input.transcript,
+            voice_input.provider,
+            voice_input.model
+        )
+        
+        # Create task objects but don't save them yet
+        tasks_for_review = []
+        for i, task_data in enumerate(result.get("tasks", [])):
+            task = {
+                "id": str(uuid.uuid4()),
+                "title": task_data.get("title", "Untitled Task"),
+                "description": task_data.get("description", ""),
+                "urgency": task_data.get("urgency", 2),
+                "importance": task_data.get("importance", 2),
+                "priority": task_data.get("priority", 2),
+                "duration": 30,  # Default 30 minutes
+                "order": i,
+            }
+            tasks_for_review.append(task)
+        
+        # Sort by priority (highest first)
+        tasks_for_review.sort(key=lambda t: t["priority"], reverse=True)
+        
+        return {
+            "success": True,
+            "tasks": tasks_for_review,
+            "summary": result.get("summary", "Tasks extracted")
+        }
+    except Exception as e:
+        logger.error(f"Error processing voice: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class PushToCalendarRequest(BaseModel):
+    tasks: List[dict]
+
+
+# Push tasks to calendar
+@api_router.post("/tasks/push-to-calendar")
+async def push_to_calendar(request: PushToCalendarRequest):
+    """Save tasks and schedule them on calendar"""
+    try:
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+        
+        # Start scheduling 1 hour from now
+        current_hour = now.hour + 1
+        current_minute = 0
+        current_date = today
+        
+        created_tasks = []
+        
+        for task_data in request.tasks:
+            # Calculate time slot
+            if current_hour >= 22:  # After 10 PM, move to tomorrow
+                current_date = tomorrow
+                current_hour = 9
+            
+            scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
+            
+            task = Task(
+                id=task_data.get("id", str(uuid.uuid4())),
+                title=task_data.get("title", "Untitled Task"),
+                description=task_data.get("description", ""),
+                urgency=task_data.get("urgency", 2),
+                importance=task_data.get("importance", 2),
+                priority=task_data.get("priority", 2),
+                duration=task_data.get("duration", 30),
+                scheduled_date=current_date,
+                scheduled_time=scheduled_time,
+                status="scheduled"
+            )
+            
+            doc = task.model_dump()
+            await db.tasks.insert_one(doc)
+            created_tasks.append(task)
+            
+            # Advance time by task duration
+            duration = task_data.get("duration", 30)
+            current_minute += duration
+            while current_minute >= 60:
+                current_minute -= 60
+                current_hour += 1
+        
+        return {
+            "success": True,
+            "tasks": [t.model_dump() for t in created_tasks],
+            "message": f"{len(created_tasks)} tasks scheduled"
+        }
+    except Exception as e:
+        logger.error(f"Error pushing to calendar: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Voice processing (legacy - direct to calendar)
 @api_router.post("/tasks/process-voice")
 async def process_voice(voice_input: VoiceInput):
     """Process voice transcript and extract/prioritize tasks, auto-schedule urgent ones"""
