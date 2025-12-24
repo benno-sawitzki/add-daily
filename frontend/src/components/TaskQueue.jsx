@@ -253,6 +253,7 @@ export default function TaskQueue({
                           mode="single"
                           selected={task.scheduled_date ? parseISO(task.scheduled_date) : new Date()}
                           onSelect={(date) => handleDateChange(task.id, date)}
+                          disabled={(date) => date < new Date(new Date().setHours(0, 0, 0, 0))}
                           initialFocus
                         />
                       </PopoverContent>
