@@ -225,13 +225,13 @@ export default function TaskQueue({
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="15">15 min</SelectItem>
                         <SelectItem value="30">30 min</SelectItem>
-                        <SelectItem value="45">45 min</SelectItem>
                         <SelectItem value="60">1 hour</SelectItem>
                         <SelectItem value="90">1.5 hrs</SelectItem>
                         <SelectItem value="120">2 hours</SelectItem>
+                        <SelectItem value="150">2.5 hrs</SelectItem>
                         <SelectItem value="180">3 hours</SelectItem>
+                        <SelectItem value="240">4 hours</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
