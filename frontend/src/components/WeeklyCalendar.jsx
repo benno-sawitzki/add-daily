@@ -382,6 +382,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                         const { index, total } = getTaskPosition(task, dateStr);
                         const width = `calc((100% - 4px) / ${total})`;
                         const left = `calc(2px + (100% - 4px) * ${index} / ${total})`;
+                        const isDragging = draggingTask?.id === task.id;
 
                         return (
                           <div
@@ -391,7 +392,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}
                             onClick={(e) => handleTaskClick(e, task)}
-                            className={`group absolute rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
+                            className={`group absolute rounded text-xs font-medium cursor-grab active:cursor-grabbing ${colors} z-10 transition-opacity ${isDragging ? 'opacity-30' : ''}`}
                             style={{ 
                               height: `${taskHeight}px`, 
                               top: '2px', 
