@@ -504,19 +504,23 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                             }}
                           >
                             <div className="p-1.5 h-full flex flex-col overflow-hidden">
-                              <span className="truncate flex-shrink-0 block">{task.title}</span>
+                              <div className="flex items-start justify-between gap-1">
+                                <span className="truncate flex-shrink block flex-1">{task.title}</span>
+                                <button
+                                  onClick={(e) => handleComplete(e, task.id)}
+                                  className="p-0.5 hover:bg-white/30 rounded flex-shrink-0 opacity-60 hover:opacity-100"
+                                  title="Mark as done"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
                               <span className="text-[10px] opacity-80 flex-shrink-0">{startTime}–{endTime}</span>
                               <div className="flex-1" />
                               <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 flex-shrink-0">
                                 <button
-                                  onClick={(e) => handleComplete(e, task.id)}
-                                  className="p-0.5 hover:bg-white/30 rounded"
-                                >
-                                  <CheckCircle2 className="w-3 h-3" />
-                                </button>
-                                <button
                                   onClick={(e) => handleDelete(e, task.id)}
                                   className="p-0.5 hover:bg-white/30 rounded"
+                                  title="Delete task"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                 </button>
