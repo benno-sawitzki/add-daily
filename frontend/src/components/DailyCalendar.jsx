@@ -322,7 +322,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                   style={{ height: `${SLOT_HEIGHT}px` }}
                 >
                   {slotTasks.map((task) => {
-                    const colors = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
+                    const priorityStyle = PRIORITY_STYLES[task.priority] || PRIORITY_STYLES[2];
                     const duration = task.duration || 30;
                     const slots = duration / 30;
                     const taskHeight = slots * SLOT_HEIGHT - 4;
@@ -332,19 +332,21 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
 
                     return (
                       <div
-                        key={task.id}
+                        key={`${task.id}-${task.priority}`}
                         data-task-id={task.id}
+                        data-priority={task.priority}
                         draggable={!resizing}
                         onDragStart={(e) => handleDragStart(e, task)}
                         onDragEnd={handleDragEnd}
                         onClick={(e) => handleTaskClick(e, task)}
-                        className={`group absolute rounded font-medium cursor-grab active:cursor-grabbing ${colors} z-10`}
+                        className="group absolute rounded font-medium cursor-grab active:cursor-grabbing z-10"
                         style={{ 
                           height: `${taskHeight}px`, 
                           top: '2px', 
                           overflow: 'hidden',
                           width: width,
-                          left: left
+                          left: left,
+                          ...priorityStyle
                         }}
                       >
                         <div className="p-2 h-full flex flex-col overflow-hidden">
