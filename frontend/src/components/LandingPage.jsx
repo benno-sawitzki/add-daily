@@ -151,7 +151,7 @@ const LandingPage = () => {
                         <div className="h-3 bg-white/10 rounded-full w-1/2" />
                       </div>
                     </div>
-                    <p className="text-white/60 text-sm italic">"Call John for an hour, then prepare the presentation which takes 2 hours, and send a quick email..."</p>
+                    <p className="text-white/60 text-sm italic">&quot;Call John for an hour, then prepare the presentation which takes 2 hours, and send a quick email...&quot;</p>
                   </div>
                   {/* Task Cards Mock */}
                   <div className="space-y-2">
