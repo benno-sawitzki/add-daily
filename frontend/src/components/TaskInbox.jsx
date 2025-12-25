@@ -138,7 +138,7 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
         </div>
         <h3 className="text-xl font-semibold mb-2">Your inbox is empty</h3>
         <p className="text-muted-foreground text-center max-w-md">
-          Click the "Add Tasks" button and speak to add tasks. The AI will help prioritize them for you.
+          Click the "Braindump" button and speak to add tasks. The AI will help prioritize them for you.
         </p>
       </div>
     );

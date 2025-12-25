@@ -226,7 +226,8 @@ class Task(BaseModel):
     scheduled_date: Optional[str] = None  # ISO date string
     scheduled_time: Optional[str] = None  # HH:MM format
     duration: int = Field(default=30)  # Duration in minutes (30, 60, 90, etc.)
-    status: str = Field(default="inbox")  # inbox, scheduled, completed
+    status: str = Field(default="inbox")  # inbox, next, scheduled, completed, later
+    expires_at: Optional[str] = None  # ISO datetime string for 'later' tasks
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 class TaskCreate(BaseModel):
@@ -297,28 +298,51 @@ def transform_task_to_frontend_format(task_data: dict) -> dict:
     urgency = priority_num
     importance = priority_num
     
-    # Extract duration from notes if mentioned, otherwise default to 30
-    duration = 30
+    # Get notes for description (always needed)
     notes = task_data.get("notes", "") or ""
-    notes_lower = notes.lower()
     
-    # Look for duration mentions in notes
-    import re
-    duration_patterns = [
-        (r"(\d+)\s*hours?", lambda m: int(m.group(1)) * 60),
-        (r"(\d+)\s*hrs?", lambda m: int(m.group(1)) * 60),
-        (r"(\d+)\s*h", lambda m: int(m.group(1)) * 60),
-        (r"(\d+)\s*minutes?", lambda m: int(m.group(1))),
-        (r"(\d+)\s*mins?", lambda m: int(m.group(1))),
-        (r"half\s*an?\s*hour", lambda m: 30),
-        (r"quarter\s*hour", lambda m: 15),
-    ]
+    # Extract duration - prefer AI-extracted duration_minutes, fallback to parsing notes/title
+    duration = task_data.get("duration_minutes")
     
-    for pattern, converter in duration_patterns:
-        match = re.search(pattern, notes_lower)
-        if match:
-            duration = converter(match)
-            break
+    # If AI didn't extract duration, try to parse from notes and title
+    if duration is None or not isinstance(duration, (int, float)) or duration <= 0:
+        duration = 30  # Default
+        import re
+        
+        # Check both notes and title for duration mentions
+        title = task_data.get("title", "") or ""
+        text_to_search = f"{title} {notes}".lower()
+        
+        # Look for duration mentions (both numeric and written-out numbers)
+        duration_patterns = [
+            # Numeric patterns
+            (r"(\d+)\s*hours?", lambda m: int(m.group(1)) * 60),
+            (r"(\d+)\s*hrs?", lambda m: int(m.group(1)) * 60),
+            (r"(\d+)\s*h\b", lambda m: int(m.group(1)) * 60),
+            (r"(\d+)\s*minutes?", lambda m: int(m.group(1))),
+            (r"(\d+)\s*mins?", lambda m: int(m.group(1))),
+            (r"(\d+)\s*m\b", lambda m: int(m.group(1))),
+            # Written-out numbers (common patterns)
+            (r"one\s*hour", lambda m: 60),
+            (r"two\s*hours?", lambda m: 120),
+            (r"three\s*hours?", lambda m: 180),
+            (r"four\s*hours?", lambda m: 240),
+            (r"five\s*hours?", lambda m: 300),
+            (r"half\s*an?\s*hour", lambda m: 30),
+            (r"quarter\s*hour", lambda m: 15),
+            # "takes X hours" pattern (handles "that takes two hours")
+            (r"takes?\s+(\d+)\s*hours?", lambda m: int(m.group(1)) * 60),
+            (r"takes?\s+two\s*hours?", lambda m: 120),
+            (r"takes?\s+one\s*hour", lambda m: 60),
+            (r"that\s+takes?\s+two\s*hours?", lambda m: 120),
+            (r"that\s+takes?\s+(\d+)\s*hours?", lambda m: int(m.group(1)) * 60),
+        ]
+        
+        for pattern, converter in duration_patterns:
+            match = re.search(pattern, text_to_search)
+            if match:
+                duration = converter(match)
+                break
     
     return {
         "title": task_data.get("title", "Untitled Task"),
@@ -341,13 +365,45 @@ async def get_ai_response(transcript: str, provider: str, model: str) -> dict:
     if not api_key:
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY not configured")
     
-    system_message = """You are a task extraction AI. Extract tasks from user's voice input.
+    system_message = """You are a task extraction AI. Extract ALL tasks from user's voice input.
 
+CRITICAL RULE: You MUST extract EVERY task mentioned in the input as a separate task object. If the user says multiple things, each one is a separate task.
+
+EXAMPLES OF MULTIPLE TASKS:
+Input: "Go to the gym for hours. Grocery shopping, that's very important, that's 90 minutes. And then meet parents, that's three hours in the evening, that's also very important."
+Output: 3 tasks:
+1. "Go to the gym" (duration: estimate based on "for hours" or use default)
+2. "Grocery shopping" (priority: high, duration: 90 minutes)
+3. "Meet parents" (priority: high, duration: 180 minutes, notes: "in the evening")
+
+Input: "Call the dentist tomorrow, urgent. Buy groceries this weekend. Also schedule a meeting."
+Output: 3 tasks:
+1. "Call the dentist" (due_date: tomorrow, priority: high)
+2. "Buy groceries" (due_date: this weekend)
+3. "Schedule a meeting"
+
+Input: "I need to do X, Y, and Z"
+Output: 3 tasks: X, Y, Z
+    
 For each task, determine:
-- title: A clear, concise task title
+- title: A clear, concise task title (required) - extract from the spoken text
 - due_date: Date in YYYY-MM-DD format if mentioned, otherwise null
 - notes: Additional details, context, or notes about the task (can be null)
-- priority: One of "low", "medium", "high", or null if not specified
+- priority: One of "low", "medium", "high", or null if not specified. If user says "important", "urgent", "critical" → use "high"
+- duration_minutes: Duration in minutes if mentioned. Examples:
+  * "2 hours" or "two hours" → 120
+  * "3 hours" or "three hours" → 180
+  * "30 minutes" or "half an hour" → 30
+  * "90 minutes" or "90 mins" → 90
+  * "an hour" or "one hour" → 60
+  * "for hours" (vague) → null or estimate (e.g., 60)
+  If not mentioned, use null.
+
+SEPARATION RULES - These indicate separate tasks:
+- Periods (.) between sentences
+- "And then", "Also", "And", "Then"
+- Commas followed by new context
+- Numbered lists ("first", "second", "task 1", etc.)
 
 Respond ONLY with a JSON object in this exact format (no markdown, no code blocks):
 {
@@ -356,7 +412,8 @@ Respond ONLY with a JSON object in this exact format (no markdown, no code block
       "title": "string",
       "due_date": "string or null",
       "notes": "string or null",
-      "priority": "low" | "medium" | "high" | null
+      "priority": "low" | "medium" | "high" | null,
+      "duration_minutes": number or null
     }
   ],
   "summary": "Brief summary of what was extracted"
@@ -364,21 +421,45 @@ Respond ONLY with a JSON object in this exact format (no markdown, no code block
 
 If no tasks can be extracted, return {"tasks": [], "summary": "No tasks found"}
 
-IMPORTANT: Return ONLY valid JSON. Do not wrap in markdown code blocks."""
+IMPORTANT: Return ONLY valid JSON. Do not wrap in markdown code blocks. Extract ALL tasks mentioned - count them carefully."""
     
     # Map provider/model to OpenAI model
     openai_model = get_model_for_provider(provider, model)
     
-    user_prompt = f"Extract and prioritize tasks from this voice input: {transcript}"
+    user_prompt = f"""Extract ALL tasks from this voice transcript. Count how many distinct tasks are mentioned and extract EVERY one as a separate task object.
+
+Look for:
+- Sentences separated by periods
+- Phrases connected by "and", "also", "then", "and then"
+- Each distinct activity or action mentioned
+
+Duration patterns to extract:
+- "X hours" or "X hour" → duration_minutes: X * 60
+- "X minutes" or "X mins" → duration_minutes: X
+- "for hours" (vague) → estimate or null
+
+Priority indicators:
+- "important", "very important", "urgent", "critical" → priority: "high"
+- "not urgent", "low priority" → priority: "low"
+
+Transcript: {transcript}
+
+IMPORTANT: Count the number of tasks first, then extract each one. If you see 3 distinct activities, return 3 task objects."""
     
     try:
         # Get response from AI with strict JSON
+        # Very low temperature for more consistent and complete extraction
         raw_result = await generate_json(
             system_prompt=system_message,
             user_prompt=user_prompt,
             model=openai_model,
-            temperature=0.7
+            temperature=0.1  # Very low temperature for deterministic, complete task extraction
         )
+        
+        logger.info(f"🔍 DIAGNOSTIC: Raw AI response (OpenAI JSON): {json.dumps(raw_result, indent=2)}")
+        logger.info(f"🔍 DIAGNOSTIC: Number of tasks in raw AI response: {len(raw_result.get('tasks', []))}")
+        logger.info(f"🔍 DIAGNOSTIC: Raw response type: {type(raw_result)}")
+        logger.info(f"🔍 DIAGNOSTIC: Raw response keys: {raw_result.keys() if isinstance(raw_result, dict) else 'Not a dict'}")
         
         # Validate and transform tasks
         if not isinstance(raw_result, dict):
@@ -396,24 +477,47 @@ IMPORTANT: Return ONLY valid JSON. Do not wrap in markdown code blocks."""
                 detail="AI returned invalid tasks format"
             )
         
+        logger.info(f"Extracted {len(tasks)} tasks from AI response")
+        
+        if len(tasks) == 0:
+            logger.warning(f"No tasks extracted from transcript: {transcript[:200]}")
+            return {
+                "tasks": [],
+                "summary": raw_result.get("summary", "No tasks found in transcript")
+            }
+        
         # Transform each task to frontend format
         transformed_tasks = []
-        for task_data in tasks:
+        for i, task_data in enumerate(tasks):
             if not isinstance(task_data, dict):
-                logger.warning(f"Skipping invalid task (not a dict): {task_data}")
+                logger.warning(f"Skipping invalid task {i} (not a dict): {task_data}")
                 continue
             
             try:
+                logger.info(f"Transforming task {i+1}: {json.dumps(task_data, indent=2)}")
                 transformed = transform_task_to_frontend_format(task_data)
                 transformed_tasks.append(transformed)
+                logger.info(f"Successfully transformed task {i+1}: {transformed.get('title', 'Untitled')} (duration: {transformed.get('duration', 'N/A')}, priority: {transformed.get('priority', 'N/A')})")
             except Exception as e:
-                logger.warning(f"Error transforming task {task_data}: {e}")
+                logger.error(f"Error transforming task {i} {json.dumps(task_data)}: {e}", exc_info=True)
                 continue
         
-        return {
+        logger.info(f"🔍 DIAGNOSTIC: Successfully transformed {len(transformed_tasks)} out of {len(tasks)} tasks")
+        logger.info(f"🔍 DIAGNOSTIC: Transformed tasks details: {json.dumps([{'title': t.get('title'), 'duration': t.get('duration'), 'priority': t.get('priority')} for t in transformed_tasks], indent=2)}")
+        
+        if len(transformed_tasks) == 0:
+            logger.error(f"🔍 DIAGNOSTIC: All tasks failed to transform! Original tasks: {json.dumps(tasks, indent=2)}")
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to transform any tasks. Please try again or rephrase your input."
+            )
+        
+        result = {
             "tasks": transformed_tasks,
             "summary": raw_result.get("summary", "Tasks extracted")
         }
+        logger.info(f"🔍 DIAGNOSTIC: Returning from get_ai_response: {len(result['tasks'])} tasks")
+        return result
         
     except json.JSONDecodeError as e:
         logger.error(f"JSON parsing failed in get_ai_response: {str(e)}")
@@ -610,12 +714,20 @@ async def create_task(task_input: TaskCreate, user: dict = Depends(get_current_u
     task = Task(**task_input.model_dump(), user_id=user["id"])
     pool = await get_db_pool()
     async with pool.acquire() as conn:
+        # Convert expires_at string to datetime if provided
+        expires_at_value = None
+        if task.expires_at:
+            try:
+                expires_at_value = datetime.fromisoformat(task.expires_at.replace('Z', '+00:00'))
+            except (ValueError, AttributeError):
+                expires_at_value = None
+        
         await conn.execute(
             """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-               scheduled_date, scheduled_time, duration, status, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+               scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
             task.id, user["id"], task.title, task.description, task.priority, task.urgency, task.importance,
-            task.scheduled_date, task.scheduled_time, task.duration, task.status, datetime.now(timezone.utc)
+            task.scheduled_date, task.scheduled_time, task.duration, task.status, expires_at_value, datetime.now(timezone.utc)
         )
     return task
 
@@ -645,7 +757,7 @@ async def get_task(task_id: str, user: dict = Depends(get_current_user)):
     async with pool.acquire() as conn:
         row = await conn.fetchrow(
             """SELECT id, user_id, title, description, priority, urgency, importance, 
-               scheduled_date::text, scheduled_time, duration, status, created_at::text
+               scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
                FROM tasks WHERE id = $1 AND user_id = $2""",
             task_id, user["id"]
         )
@@ -664,7 +776,7 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         # Build dynamic update query with proper parameterization
         # Only allow updating specific fields that exist in the database
         allowed_fields = {'title', 'description', 'priority', 'urgency', 'importance', 
-                         'scheduled_date', 'scheduled_time', 'duration', 'status'}
+                         'scheduled_date', 'scheduled_time', 'duration', 'status', 'expires_at'}
         filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields}
         
         if not filtered_data:
@@ -693,7 +805,7 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         query = f"""UPDATE tasks SET {', '.join(set_clauses)} 
                     WHERE {where_clause}
                     RETURNING id, user_id, title, description, priority, urgency, importance, 
-                              scheduled_date::text, scheduled_time, duration, status, created_at::text"""
+                              scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text"""
         
         try:
             logger.info(f"Updating task {task_id} with {len(filtered_data)} fields")
@@ -725,19 +837,37 @@ async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
 async def process_voice_queue(voice_input: VoiceInput, user: dict = Depends(get_current_user)):
     """Process voice transcript and return tasks for review (not saved yet)"""
     try:
+        logger.info(f"Processing voice input: transcript length={len(voice_input.transcript)}, provider={voice_input.provider}, model={voice_input.model}")
+        logger.info(f"Transcript preview: {voice_input.transcript[:200]}")
+        
         result = await get_ai_response(
             voice_input.transcript,
             voice_input.provider,
             voice_input.model
         )
         
+        logger.info(f"AI response received: {len(result.get('tasks', []))} tasks found")
+        logger.info(f"Result structure: {json.dumps(result, indent=2, default=str)}")
+        
+        if len(result.get("tasks", [])) == 0:
+            logger.warning(f"No tasks extracted from transcript: {voice_input.transcript[:200]}")
+            return {
+                "success": False,
+                "tasks": [],
+                "summary": result.get("summary", "No tasks found in your input"),
+                "error": "No tasks could be extracted from the transcript"
+            }
+        
         # get_ai_response already returns tasks in frontend format
         # Just add id and order fields for the queue
         tasks_for_review = []
         for i, task_data in enumerate(result.get("tasks", [])):
+            logger.info(f"Processing task {i+1} for queue: {json.dumps(task_data, default=str)}")
+            
             # Ensure duration is valid
             duration = task_data.get("duration", 30)
             if not isinstance(duration, (int, float)) or duration <= 0:
+                logger.warning(f"Invalid duration for task {i+1}: {duration}, using default 30")
                 duration = 30
             
             task = {
@@ -751,21 +881,27 @@ async def process_voice_queue(voice_input: VoiceInput, user: dict = Depends(get_
                 "order": i,
             }
             tasks_for_review.append(task)
+            logger.info(f"Added task {i+1} to queue: {task['title']} (duration: {task['duration']}, priority: {task['priority']})")
         
         # Sort by priority (highest first)
         tasks_for_review.sort(key=lambda t: t["priority"], reverse=True)
         
-        return {
+        logger.info(f"🔍 DIAGNOSTIC: Returning {len(tasks_for_review)} tasks for review from process_voice_queue")
+        logger.info(f"🔍 DIAGNOSTIC: Tasks for review details: {json.dumps([{'title': t.get('title'), 'duration': t.get('duration'), 'priority': t.get('priority')} for t in tasks_for_review], indent=2)}")
+        
+        response = {
             "success": True,
             "tasks": tasks_for_review,
             "summary": result.get("summary", "Tasks extracted")
         }
+        logger.info(f"🔍 DIAGNOSTIC: Final response from process_voice_queue: {len(response['tasks'])} tasks")
+        return response
     except HTTPException:
         # Re-raise HTTP exceptions (already properly formatted)
         raise
     except Exception as e:
-        logger.error(f"Error processing voice: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error processing voice: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to process voice input: {str(e)}")
 
 
 class PushToCalendarRequest(BaseModel):
@@ -797,7 +933,8 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
                     values_list.append(
                         f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
                         f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
-                        f"${param_num+8}, ${param_num+9}, ${param_num+10}, ${param_num+11})"
+                        f"${param_num+8}, ${param_num+9}, ${param_num+10}, ${param_num+11}, "
+                        f"${param_num+12}, ${param_num+13})"
                     )
                     params.extend([
                         task_id,
@@ -807,21 +944,23 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
                         task_data.get("priority", 2),
                         task_data.get("urgency", 2),
                         task_data.get("importance", 2),
+                        task_data.get("energy_required", "medium"),  # energy_required
                         None,  # scheduled_date (NULL for inbox tasks)
                         None,  # scheduled_time (NULL for inbox tasks)
                         task_data.get("duration", 30),
                         "inbox",  # status
+                        None,  # expires_at (NULL for inbox tasks)
                         created_at
                     ])
-                    param_num += 12
+                    param_num += 14
                 
                 # Single batch INSERT with RETURNING - much faster!
                 query = f"""
-                    INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-                                     scheduled_date, scheduled_time, duration, status, created_at)
+                    INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, energy_required,
+                                     scheduled_date, scheduled_time, duration, status, expires_at, created_at)
                     VALUES {', '.join(values_list)}
-                    RETURNING id, user_id, title, description, priority, urgency, importance, 
-                              scheduled_date::text, scheduled_time, duration, status, created_at::text
+                    RETURNING id, user_id, title, description, priority, urgency, importance, energy_required,
+                              scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
                 """
                 
                 rows = await conn.fetch(query, *params)
@@ -845,10 +984,17 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
         now = datetime.now(timezone.utc)
         today = now.strftime("%Y-%m-%d")
         
+        # If it's after 10 PM (22:00), default to tomorrow instead of today
+        if now.hour >= 22:
+            tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
+            default_date = tomorrow
+        else:
+            default_date = today
+        
         # Group tasks by date
         tasks_by_date = {}
         for task_data in request.tasks:
-            date_str = task_data.get("scheduled_date") or today
+            date_str = task_data.get("scheduled_date") or default_date
             if date_str not in tasks_by_date:
                 tasks_by_date[date_str] = []
             tasks_by_date[date_str].append(task_data)
@@ -867,70 +1013,71 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
                         detail=f"Invalid date format for scheduled_date: {date_str}. Expected YYYY-MM-DD"
                     )
                 
-                # Start scheduling 1 hour from now for today, 9 AM for other days
-                if date_str == today:
+                # Start scheduling: 1 hour from now if it's today (and before 10 PM), otherwise 9 AM
+                if date_str == today and now.hour < 22:
                     current_hour = now.hour + 1
                 else:
                     current_hour = 9
                 current_minute = 0
+            
+            for task_data in date_tasks:
+                # Wrap to next day if past 10 PM
+                if current_hour >= 22:
+                    current_hour = 9
+                    current_minute = 0
                 
-                for task_data in date_tasks:
-                    # Wrap to next day if past 10 PM
-                    if current_hour >= 22:
-                        current_hour = 9
-                        current_minute = 0
+                scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
+                
+                # Ensure all required fields have defaults
+                task_id = task_data.get("id") or str(uuid.uuid4())
+                title = task_data.get("title") or "Untitled Task"
+                description = task_data.get("description") or ""
+                urgency = task_data.get("urgency", 2)
+                importance = task_data.get("importance", 2)
+                priority = task_data.get("priority", 2)
+                duration = task_data.get("duration", 30)
+                
+                # Validate priority, urgency, importance are in valid range
+                priority = max(1, min(4, priority))
+                urgency = max(1, min(4, urgency))
+                importance = max(1, min(4, importance))
+                
+                created_at = datetime.now(timezone.utc)
+                
+                try:
+                    await conn.execute(
+                        """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
+                               scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
+                        task_id, user["id"], title, description, priority, urgency, importance,
+                        date_obj, scheduled_time, duration, "scheduled", None, created_at
+                    )
                     
-                    scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
-                    
-                    # Ensure all required fields have defaults
-                    task_id = task_data.get("id") or str(uuid.uuid4())
-                    title = task_data.get("title") or "Untitled Task"
-                    description = task_data.get("description") or ""
-                    urgency = task_data.get("urgency", 2)
-                    importance = task_data.get("importance", 2)
-                    priority = task_data.get("priority", 2)
-                    duration = task_data.get("duration", 30)
-                    
-                    # Validate priority, urgency, importance are in valid range
-                    priority = max(1, min(4, priority))
-                    urgency = max(1, min(4, urgency))
-                    importance = max(1, min(4, importance))
-                    
-                    created_at = datetime.now(timezone.utc)
-                    
-                    try:
-                        await conn.execute(
-                            """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-                               scheduled_date, scheduled_time, duration, status, created_at)
-                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
-                            task_id, user["id"], title, description, priority, urgency, importance,
-                            date_obj, scheduled_time, duration, "scheduled", created_at
-                        )
-                        
-                        created_tasks.append({
-                            "id": task_id,
-                            "title": title,
-                            "description": description,
-                            "priority": priority,
-                            "urgency": urgency,
-                            "importance": importance,
-                            "scheduled_date": date_obj.strftime("%Y-%m-%d"),  # Convert back to string for response
-                            "scheduled_time": scheduled_time,
-                            "duration": duration,
-                            "status": "scheduled"
-                        })
-                    except Exception as db_error:
+                    created_tasks.append({
+                        "id": task_id,
+                        "title": title,
+                        "description": description,
+                        "priority": priority,
+                        "urgency": urgency,
+                        "importance": importance,
+                        "scheduled_date": date_obj.strftime("%Y-%m-%d"),  # Convert back to string for response
+                        "scheduled_time": scheduled_time,
+                        "duration": duration,
+                        "status": "scheduled",
+                        "expires_at": None
+                    })
+                except Exception as db_error:
                         logger.error(f"Database error inserting task {task_id}: {str(db_error)}")
                         raise HTTPException(
                             status_code=500,
                             detail=f"Failed to save task '{title}': {str(db_error)}"
                         )
-                    
-                    # Advance time by task duration
-                    current_minute += duration
-                    while current_minute >= 60:
-                        current_minute -= 60
-                        current_hour += 1
+                
+                # Advance time by task duration
+                current_minute += duration
+                while current_minute >= 60:
+                    current_minute -= 60
+                    current_hour += 1
         
         return {
             "success": True,
@@ -998,9 +1145,9 @@ async def transcribe_audio_endpoint(audio: UploadFile = File(...), user: dict = 
         # Transcribe using OpenAI Whisper
         transcript_text = await transcribe_audio_file(
             audio_file_path=tmp_path,
-            model="whisper-1",
-            language="en"
-        )
+                model="whisper-1",
+                language="en"
+            )
         
         # Clean up temp file
         os.unlink(tmp_path)
@@ -1121,6 +1268,115 @@ async def export_ical(user: dict = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error exporting iCal: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# Task status management endpoints
+@api_router.post("/tasks/{task_id}/make-next")
+async def make_task_next(task_id: str, user: dict = Depends(get_current_user)):
+    """Set a task as 'next' and move any existing 'next' task back to 'inbox'"""
+    pool = await get_db_pool()
+    
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            # Check if task exists and belongs to user
+            task = await conn.fetchrow(
+                "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+                task_id, user["id"]
+            )
+            if not task:
+                raise HTTPException(status_code=404, detail="Task not found")
+            
+            # Find existing 'next' task for this user and move it back to inbox
+            existing_next = await conn.fetchrow(
+                "SELECT id FROM tasks WHERE user_id = $1 AND status = 'next'",
+                user["id"]
+            )
+            if existing_next:
+                await conn.execute(
+                    "UPDATE tasks SET status = 'inbox' WHERE id = $1 AND user_id = $2",
+                    existing_next["id"], user["id"]
+                )
+            
+            # Set the requested task as 'next'
+            await conn.execute(
+                "UPDATE tasks SET status = 'next' WHERE id = $1 AND user_id = $2",
+                task_id, user["id"]
+            )
+            
+            # Return the updated task
+            updated_task = await conn.fetchrow(
+                """SELECT id, user_id, title, description, priority, urgency, importance, energy_required,
+                   scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+                   FROM tasks WHERE id = $1 AND user_id = $2""",
+                task_id, user["id"]
+            )
+    
+    return dict(updated_task)
+
+
+@api_router.post("/tasks/{task_id}/move-to-inbox")
+async def move_task_to_inbox(task_id: str, user: dict = Depends(get_current_user)):
+    """Move a task back to 'inbox' status"""
+    pool = await get_db_pool()
+    
+    async with pool.acquire() as conn:
+        # Check if task exists and belongs to user
+        task = await conn.fetchrow(
+            "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+            task_id, user["id"]
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Update status to inbox
+        await conn.execute(
+            "UPDATE tasks SET status = 'inbox' WHERE id = $1 AND user_id = $2",
+            task_id, user["id"]
+        )
+        
+        # Return the updated task
+        updated_task = await conn.fetchrow(
+            """SELECT id, user_id, title, description, priority, urgency, importance, energy_required,
+               scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+               FROM tasks WHERE id = $1 AND user_id = $2""",
+            task_id, user["id"]
+        )
+    
+    return dict(updated_task)
+
+
+@api_router.post("/tasks/{task_id}/move-to-later")
+async def move_task_to_later(task_id: str, user: dict = Depends(get_current_user)):
+    """Move a task to 'later' status with 14-day expiration"""
+    pool = await get_db_pool()
+    
+    # Calculate expiration: now + 14 days
+    expires_at = datetime.now(timezone.utc) + timedelta(days=14)
+    
+    async with pool.acquire() as conn:
+        # Check if task exists and belongs to user
+        task = await conn.fetchrow(
+            "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
+            task_id, user["id"]
+        )
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+        
+        # Update status to later and set expires_at
+        await conn.execute(
+            "UPDATE tasks SET status = 'later', expires_at = $1 WHERE id = $2 AND user_id = $3",
+            expires_at, task_id, user["id"]
+        )
+        
+        # Return the updated task
+        updated_task = await conn.fetchrow(
+            """SELECT id, user_id, title, description, priority, urgency, importance, energy_required,
+               scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+               FROM tasks WHERE id = $1 AND user_id = $2""",
+            task_id, user["id"]
+        )
+    
+    return dict(updated_task)
 
 
 # ===== Google Calendar Integration =====

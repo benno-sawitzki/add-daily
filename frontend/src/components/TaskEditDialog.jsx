@@ -41,6 +41,8 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
     description: "",
     urgency: "2",
     importance: "2",
+    priority: "2",
+    energy_required: "medium",
     scheduled_date: null,
     scheduled_time: "",
     duration: "30",
@@ -54,30 +56,60 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
         description: task.description || "",
         urgency: String(task.urgency || 2),
         importance: String(task.importance || 2),
+        priority: String(task.priority || 2),
+        energy_required: task.energy_required || "medium",
         scheduled_date: task.scheduled_date || null,
         scheduled_time: task.scheduled_time || "",
         duration: String(task.duration || 30),
         status: task.status || "inbox",
       });
+    } else {
+      // Reset form for new task
+      setFormData({
+        title: "",
+        description: "",
+        urgency: "2",
+        importance: "2",
+        priority: "2",
+        energy_required: "medium",
+        scheduled_date: null,
+        scheduled_time: "",
+        duration: "30",
+        status: "inbox",
+      });
     }
   }, [task]);
 
   const handleSave = () => {
+    if (!formData.title.trim()) {
+      return; // Don't save empty tasks
+    }
+
     const urgency = parseInt(formData.urgency);
     const importance = parseInt(formData.importance);
-    const priority = Math.round((urgency + importance) / 2);
+    // Use priority from form, or calculate from urgency + importance if not set
+    const priority = parseInt(formData.priority) || Math.round((urgency + importance) / 2);
 
-    onSave(task.id, {
+    const taskData = {
       title: formData.title,
       description: formData.description,
       urgency,
       importance,
       priority,
+      energy_required: formData.energy_required,
       scheduled_date: formData.scheduled_date,
       scheduled_time: formData.scheduled_time,
       duration: parseInt(formData.duration),
       status: formData.scheduled_date ? "scheduled" : "inbox",
-    });
+    };
+
+    if (task) {
+      // Edit existing task
+      onSave(task.id, taskData);
+    } else {
+      // Create new task - pass null as id to indicate creation
+      onSave(null, taskData);
+    }
     onOpenChange(false);
   };
 
@@ -89,8 +121,10 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
   };
 
   const handleDelete = () => {
-    onDelete(task.id);
-    onOpenChange(false);
+    if (task && task.id) {
+      onDelete(task.id);
+      onOpenChange(false);
+    }
   };
 
   const handleDateSelect = (date) => {
@@ -104,7 +138,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]" data-testid="task-edit-dialog">
         <DialogHeader>
-          <DialogTitle>Edit Task</DialogTitle>
+          <DialogTitle>{task ? "Edit Task" : "Add New Task"}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 py-4">
@@ -134,8 +168,8 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
             />
           </div>
 
-          {/* Urgency & Importance */}
-          <div className="grid grid-cols-2 gap-4">
+          {/* Urgency & Importance & Energy */}
+          <div className="grid grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label>Urgency</Label>
               <Select
@@ -176,6 +210,23 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
                       </div>
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Energy Required</Label>
+              <Select
+                value={formData.energy_required}
+                onValueChange={(value) => setFormData({ ...formData, energy_required: value })}
+              >
+                <SelectTrigger data-testid="energy-select">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">⚡ Low</SelectItem>
+                  <SelectItem value="medium">⚡⚡ Medium</SelectItem>
+                  <SelectItem value="high">⚡⚡⚡ High</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -267,32 +318,36 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
 
         <DialogFooter className="flex justify-between sm:justify-between">
           <div className="flex gap-2">
-            <Button
-              variant="destructive"
-              onClick={handleDelete}
-              className="gap-2"
-              data-testid="delete-task-btn"
-            >
-              <Trash2 className="w-4 h-4" />
-              Delete
-            </Button>
-            {task?.status === "scheduled" && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  onSave(task.id, { 
-                    status: "inbox", 
-                    scheduled_date: null, 
-                    scheduled_time: null 
-                  });
-                  onOpenChange(false);
-                }}
-                className="gap-2"
-                data-testid="move-to-inbox-btn"
-              >
-                <Inbox className="w-4 h-4" />
-                To Inbox
-              </Button>
+            {task && (
+              <>
+                <Button
+                  variant="destructive"
+                  onClick={handleDelete}
+                  className="gap-2"
+                  data-testid="delete-task-btn"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </Button>
+                {task?.status === "scheduled" && (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      onSave(task.id, { 
+                        status: "inbox", 
+                        scheduled_date: null, 
+                        scheduled_time: null 
+                      });
+                      onOpenChange(false);
+                    }}
+                    className="gap-2"
+                    data-testid="move-to-inbox-btn"
+                  >
+                    <Inbox className="w-4 h-4" />
+                    To Inbox
+                  </Button>
+                )}
+              </>
             )}
           </div>
           <div className="flex gap-2">
@@ -300,7 +355,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
               Cancel
             </Button>
             <Button onClick={handleSave} data-testid="save-task-btn">
-              Save Changes
+              {task ? "Save Changes" : "Add Task"}
             </Button>
           </div>
         </DialogFooter>

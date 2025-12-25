@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, Download } from "lucide-react";
 import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
 import TaskEditDialog from "./TaskEditDialog";
+import { getCalendarViewMode, setCalendarViewMode, generateTimeSlots, STORAGE_EVENT } from "@/utils/calendarSettings";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -23,13 +26,6 @@ const PRIORITY_COLORS = {
 
 const SLOT_HEIGHT = 32; // Height of each 30-min slot in pixels
 
-// Generate time slots from 6 AM to 10 PM in 30-min intervals
-const TIME_SLOTS = [];
-for (let hour = 6; hour <= 22; hour++) {
-  TIME_SLOTS.push(`${hour.toString().padStart(2, "0")}:00`);
-  TIME_SLOTS.push(`${hour.toString().padStart(2, "0")}:30`);
-}
-
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [editingTask, setEditingTask] = useState(null);
@@ -38,10 +34,14 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [draggingTask, setDraggingTask] = useState(null);
   const [dragPosition, setDragPosition] = useState(null); // Snapped position for drop
   const [cursorPosition, setCursorPosition] = useState(null); // Smooth cursor follow
+  const [viewMode, setViewMode] = useState(() => getCalendarViewMode()); // 'day' or '24h'
   const calendarRef = useRef(null);
   const dragTaskRef = useRef(null);
   const resizeStartY = useRef(null);
   const resizeStartDuration = useRef(null);
+
+  // Generate time slots based on view mode
+  const TIME_SLOTS = generateTimeSlots(viewMode);
 
   // Update current time every minute
   useEffect(() => {
@@ -50,6 +50,26 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     }, 60000);
     return () => clearInterval(timer);
   }, []);
+
+  // Listen for view mode changes from other components (e.g., DailyCalendar)
+  useEffect(() => {
+    const handleViewModeChange = (event) => {
+      const newMode = event.detail.viewMode;
+      setViewMode(newMode);
+    };
+
+    window.addEventListener(STORAGE_EVENT, handleViewModeChange);
+    return () => {
+      window.removeEventListener(STORAGE_EVENT, handleViewModeChange);
+    };
+  }, []);
+
+  // Handle view mode change
+  const handleViewModeChange = (checked) => {
+    const newMode = checked ? '24h' : 'day';
+    setViewMode(newMode);
+    setCalendarViewMode(newMode);
+  };
 
   // Auto-scroll to current time on mount (with 1 hour buffer)
   useEffect(() => {
@@ -61,17 +81,29 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
       // Calculate scroll position: current time minus 1 hour buffer
       // Each slot is SLOT_HEIGHT pixels, 2 slots per hour
       const bufferHours = 1;
-      const targetHour = Math.max(6, currentHour - bufferHours); // Don't scroll above 6 AM
-      const slotsFromTop = (targetHour - 6) * 2 + Math.floor(currentMin / 30);
-      const scrollPosition = Math.max(0, slotsFromTop * SLOT_HEIGHT);
+      let targetHour = currentHour - bufferHours;
       
-      // Smooth scroll to position
-      calendarRef.current.scrollTo({
-        top: scrollPosition,
-        behavior: "smooth"
-      });
+      if (viewMode === 'day') {
+        // Day view: clamp to 6am-10pm
+        targetHour = Math.max(6, Math.min(22, targetHour));
+        const slotsFromTop = (targetHour - 6) * 2 + Math.floor(currentMin / 30);
+        const scrollPosition = Math.max(0, slotsFromTop * SLOT_HEIGHT);
+        calendarRef.current.scrollTo({
+          top: scrollPosition,
+          behavior: "smooth"
+        });
+      } else {
+        // 24h view: allow any hour
+        targetHour = Math.max(0, Math.min(23, targetHour));
+        const slotsFromTop = targetHour * 2 + Math.floor(currentMin / 30);
+        const scrollPosition = Math.max(0, slotsFromTop * SLOT_HEIGHT);
+        calendarRef.current.scrollTo({
+          top: scrollPosition,
+          behavior: "smooth"
+        });
+      }
     }
-  }, []); // Only run on mount
+  }, [viewMode]); // Re-run when view mode changes
 
   const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
   const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
@@ -316,8 +348,20 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-semibold">Weekly Calendar</h2>
-        <div className="flex items-center gap-2">
-          <Button
+        <div className="flex items-center gap-4">
+          {/* View Mode Toggle */}
+          <div className="flex items-center gap-2">
+            <Label htmlFor="view-mode-toggle-weekly" className="text-sm text-muted-foreground cursor-pointer">
+              {viewMode === '24h' ? '24h' : '6am-10pm'}
+            </Label>
+            <Switch
+              id="view-mode-toggle-weekly"
+              checked={viewMode === '24h'}
+              onCheckedChange={handleViewModeChange}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
             variant="ghost"
             size="icon"
             onClick={() => setCurrentDate(subWeeks(currentDate, 1))}
@@ -352,6 +396,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             <Download className="w-4 h-4" />
             Export
           </Button>
+          </div>
         </div>
       </div>
 
@@ -413,22 +458,34 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             >
               <div 
                 className="h-full rounded-lg p-1.5 text-xs font-medium shadow-xl border border-white/20"
-                style={PRIORITY_STYLES[draggingTask.priority] || PRIORITY_STYLES[2]}
+                style={PRIORITY_STYLES[Math.max(1, Math.min(4, Number(draggingTask.priority) || 2))] || PRIORITY_STYLES[2]}
               >
                 <span className="truncate block">{draggingTask.title}</span>
               </div>
             </div>
           )}
 
-          {/* Current time indicator */}
+          {/* Current time indicator - spans full width, thicker/brighter at current day */}
           {weekDays.some(d => isToday(d)) && (() => {
             const hours = currentTime.getHours();
             const minutes = currentTime.getMinutes();
-            if (hours < 6 || hours > 22) return null;
-            const slotIndex = (hours - 6) * 2 + (minutes >= 30 ? 1 : 0);
+            
+            // Check if current time is within visible range based on view mode
+            if (viewMode === 'day' && (hours < 6 || hours > 22)) return null;
+            
+            // Calculate slot index based on view mode
+            let slotIndex;
+            if (viewMode === 'day') {
+              slotIndex = (hours - 6) * 2 + (minutes >= 30 ? 1 : 0);
+            } else {
+              // 24h view: hours start from 0
+              slotIndex = hours * 2 + (minutes >= 30 ? 1 : 0);
+            }
+            
             const minuteOffset = (minutes % 30) / 30 * SLOT_HEIGHT;
             const topPosition = slotIndex * SLOT_HEIGHT + minuteOffset;
             const todayIndex = weekDays.findIndex(d => isToday(d));
+            const dayWidth = `calc((100% - 70px) / 7)`;
             
             return (
               <div
@@ -439,15 +496,41 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                   right: '0'
                 }}
               >
-                <div 
-                  className="flex items-center"
-                  style={{
-                    marginLeft: `calc(${todayIndex} * (100% / 7))`,
-                    width: `calc(100% / 7)`
-                  }}
-                >
-                  <div className="w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] -ml-1.5"></div>
-                  <div className="flex-1 h-0.5 bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)]"></div>
+                {/* Full-width line - spans all 7 days */}
+                <div className="flex items-center w-full">
+                  {/* Days before today - thin, dim line */}
+                  {Array.from({ length: todayIndex }).map((_, i) => (
+                    <div
+                      key={`before-${i}`}
+                      className="h-0.5 bg-cyan-400/30"
+                      style={{ width: dayWidth }}
+                    />
+                  ))}
+                  
+                  {/* Today - thick, bright line with circle - full width of column */}
+                  <div 
+                    className="relative flex items-center"
+                    style={{ width: dayWidth }}
+                  >
+                    {/* Full-width line spanning the entire day column */}
+                    <div 
+                      className="h-1.5 bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)] absolute w-full"
+                    ></div>
+                    {/* Circle centered on the line */}
+                    <div 
+                      className="w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] z-10 absolute" 
+                      style={{ left: '50%', transform: 'translateX(-50%)' }}
+                    ></div>
+                  </div>
+                  
+                  {/* Days after today - thin, dim line */}
+                  {Array.from({ length: 6 - todayIndex }).map((_, i) => (
+                    <div
+                      key={`after-${i}`}
+                      className="h-0.5 bg-cyan-400/30"
+                      style={{ width: dayWidth }}
+                    />
+                  ))}
                 </div>
               </div>
             );
@@ -486,7 +569,10 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                       style={{ height: `${SLOT_HEIGHT}px` }}
                     >
                       {slotTasks.map((task) => {
-                        const priorityStyle = PRIORITY_STYLES[task.priority] || PRIORITY_STYLES[2];
+                        // Ensure priority is a number and within valid range
+                        const priority = Number(task.priority) || 2;
+                        const clampedPriority = Math.max(1, Math.min(4, priority));
+                        const priorityStyle = PRIORITY_STYLES[clampedPriority] || PRIORITY_STYLES[2];
                         const duration = task.duration || 30;
                         const slots = duration / 30;
                         const taskHeight = slots * SLOT_HEIGHT - 4;
@@ -499,9 +585,9 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
 
                         return (
                           <div
-                            key={`${task.id}-${task.priority}`}
+                            key={`${task.id}-${clampedPriority}`}
                             data-task-id={task.id}
-                            data-priority={task.priority}
+                            data-priority={clampedPriority}
                             draggable={!resizing}
                             onDragStart={(e) => handleDragStart(e, task)}
                             onDragEnd={handleDragEnd}

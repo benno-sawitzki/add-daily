@@ -11,7 +11,7 @@ const API = `${BACKEND_URL}/api`;
 // ============================================
 // VU Meter Ring Component - Dramatic amplitude response
 // ============================================
-function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
+function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize = 350 }) {
   const canvasRef = useRef(null);
   const animationRef = useRef(null);
   const currentLevelRef = useRef(0);
@@ -26,17 +26,20 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
     const ctx = canvas.getContext("2d");
     const dpr = window.devicePixelRatio || 1;
     
-    // Set canvas size with device pixel ratio for crisp rendering
-    canvas.width = size * dpr;
-    canvas.height = size * dpr;
+    // Set canvas size to match container size to prevent clipping
+    // Container is 350px, so canvas should be 350px to accommodate full expansion
+    const canvasSize = containerSize;
+    canvas.width = canvasSize * dpr;
+    canvas.height = canvasSize * dpr;
     ctx.scale(dpr, dpr);
 
-    const centerX = size / 2;
-    const centerY = size / 2;
-    const baseRadius = size / 2 - 35; // Base radius for the ring
-    // Limit maximum expansion to prevent clipping (container is 350px, canvas is 200px)
-    // Max radius should be ~150px (75px from center) to stay within 350px container
-    const maxRadius = 150;
+    // Center point is in the middle of the canvas (container)
+    const centerX = canvasSize / 2;
+    const centerY = canvasSize / 2;
+    // Base radius is based on the visual ring size (size parameter), centered in the larger canvas
+    const baseRadius = size / 2 - 35; // Base radius for the ring (visual size is 200px, so baseRadius ~65px)
+    // Max radius should stay within container bounds (350px / 2 = 175px, use 160px for safety margin)
+    const maxRadius = (canvasSize / 2) - 15; // ~160px for 350px container
 
     const draw = () => {
       const now = Date.now();
@@ -66,7 +69,7 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
       const idleBreathAmount = isRecording && currentLevel < 0.05 ? breathe * 3 : 0;
       const notRecordingBreath = !isRecording ? breathe * 2 : 0;
 
-      ctx.clearRect(0, 0, size, size);
+      ctx.clearRect(0, 0, canvasSize, canvasSize);
 
       // === Outer glow layer (dramatic expansion) ===
       if (isRecording || notRecordingBreath > 0) {
@@ -162,14 +165,14 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160 }) {
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [level, isRecording, size]);
+  }, [level, isRecording, size, containerSize]);
 
   return (
     <canvas
       ref={canvasRef}
       style={{ 
-        width: size, 
-        height: size,
+        width: containerSize, 
+        height: containerSize,
         // Center the canvas within the larger container
         position: 'absolute',
         top: '50%',
@@ -406,6 +409,15 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       const currentTranscript = transcript + interimTranscript;
       if (!currentTranscript.trim() || useWhisper) {
         await transcribeWithWhisper();
+        // Auto-process after Whisper transcription completes
+        // (handled in transcribeWithWhisper's finally block)
+      } else {
+        // Browser speech recognition: auto-process immediately
+        if (currentTranscript.trim()) {
+          setInterimTranscript(""); // Clear interim before processing
+          await onProcess(currentTranscript.trim());
+          onClose();
+        }
       }
     }
 
@@ -437,11 +449,14 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       });
       
       if (response.data.success && response.data.transcript) {
-        setTranscript(prev => {
-          const existing = prev.trim();
-          const newText = response.data.transcript.trim();
-          return existing ? `${existing} ${newText}` : newText;
-        });
+        const newTranscript = response.data.transcript.trim();
+        const updatedTranscript = transcript.trim() ? `${transcript.trim()} ${newTranscript}` : newTranscript;
+        setTranscript(updatedTranscript);
+        // Auto-process after successful transcription
+        if (updatedTranscript.trim()) {
+          await onProcess(updatedTranscript);
+          onClose();
+        }
       }
     } catch (err) {
       console.error("Whisper error:", err);
@@ -505,56 +520,16 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       </Button>
 
       <div className="relative z-10 flex flex-col items-center max-w-2xl w-full px-6">
-        {!isLoading && !isTranscribing && (
-          <div className="flex gap-2 mb-8">
-            <Button
-              variant={!useTextInput ? "default" : "outline"}
-              size="sm"
-              onClick={() => setUseTextInput(false)}
-              className="gap-2"
-              data-testid="voice-mode-btn"
-            >
-              <Mic className="w-4 h-4" />
-              Voice
-            </Button>
-            <Button
-              variant={useTextInput ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                cleanup();
-                setUseTextInput(true);
-                setIsRecording(false);
-              }}
-              className="gap-2"
-              data-testid="text-mode-btn"
-            >
-              <Keyboard className="w-4 h-4" />
-              Type
-            </Button>
-          </div>
-        )}
-
-        {useTextInput ? (
-          <div className="w-full mb-6">
-            <Textarea
-              value={transcript}
-              onChange={(e) => setTranscript(e.target.value)}
-              placeholder="Type your tasks here... e.g., 'Call the dentist tomorrow, urgent. Buy groceries this weekend.'"
-              className="min-h-[180px] bg-card/50 backdrop-blur-xl border-border/30 text-lg resize-none"
-              data-testid="text-input"
-            />
-          </div>
-        ) : (
-          <>
-            {/* VU Meter + Record Button Container */}
-            {/* Container is larger than VU meter to prevent clipping of expanding rings */}
-            {/* VU meter is 200px, container is 350px to allow ~75px expansion on each side */}
-            <div className="relative mb-8 flex items-center justify-center" style={{ width: 350, height: 350, overflow: 'hidden' }}>
+        {/* VU Meter + Record Button Container - Always present to maintain consistent layout */}
+        <div className="relative mb-4 flex items-center justify-center" style={{ width: 350, height: 350, overflow: 'hidden' }}>
+          {!useTextInput ? (
+            <>
               {/* VU Meter Ring */}
               <VUMeterRing 
                 level={audioLevel} 
                 isRecording={isRecording} 
                 size={200}
+                containerSize={350}
               />
 
               {/* Record Button */}
@@ -588,44 +563,90 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                   <Mic className="w-8 h-8 text-muted-foreground" />
                 )}
               </motion.button>
-            </div>
+            </>
+          ) : (
+            /* Placeholder in type mode to maintain consistent spacing */
+            <div className="flex items-center justify-center w-28 h-28" />
+          )}
+        </div>
 
-            <p className="text-lg mb-4 text-center">
-              {isLoading ? (
-                <span className="text-primary">Processing your tasks...</span>
-              ) : isTranscribing ? (
-                <span className="text-primary">Transcribing with AI...</span>
-              ) : isRecording ? (
-                <span className="text-rose-400">Recording... Tap to stop</span>
-              ) : (
-                <span className="text-muted-foreground">Tap to start recording</span>
-              )}
-            </p>
+        {/* Status text - Always present */}
+        <p className="text-lg mb-4 text-center min-h-[28px]">
+          {isLoading ? (
+            <span className="text-primary">Processing your tasks...</span>
+          ) : isTranscribing ? (
+            <span className="text-primary">Transcribing with AI...</span>
+          ) : isRecording ? (
+            <span className="text-rose-400">Recording... Tap to stop</span>
+          ) : useTextInput ? (
+            <span className="text-muted-foreground">Type your tasks below</span>
+          ) : (
+            <span className="text-muted-foreground">Tap to start recording</span>
+          )}
+        </p>
 
-            {useWhisper && !isRecording && !isTranscribing && (
-              <p className="text-xs text-muted-foreground mb-4">
-                Using Whisper AI for transcription
-              </p>
-            )}
-
-            {error && (
-              <p className="text-amber-500 text-sm mb-4 text-center">{error}</p>
-            )}
-
-            <div className="w-full mb-6">
-              <Textarea
-                value={fullTranscript}
-                onChange={(e) => {
-                  setTranscript(e.target.value);
-                  setInterimTranscript("");
-                }}
-                placeholder={isRecording ? "Speak now... transcript will appear here" : "Your transcribed text will appear here..."}
-                className="min-h-[120px] bg-card/50 backdrop-blur-xl border-border/30 text-lg resize-none"
-                data-testid="transcript-textarea"
-              />
-            </div>
-          </>
+        {/* Toggle buttons - Below status text */}
+        {!isLoading && !isTranscribing && (
+          <div className="flex gap-2 mb-4">
+            <Button
+              variant={!useTextInput ? "default" : "outline"}
+              size="sm"
+              onClick={() => setUseTextInput(false)}
+              className="gap-2"
+              data-testid="voice-mode-btn"
+            >
+              <Mic className="w-4 h-4" />
+              Voice
+            </Button>
+            <Button
+              variant={useTextInput ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                cleanup();
+                setUseTextInput(true);
+                setIsRecording(false);
+              }}
+              className="gap-2"
+              data-testid="text-mode-btn"
+            >
+              <Keyboard className="w-4 h-4" />
+              Type
+            </Button>
+          </div>
         )}
+
+        {/* Additional info messages */}
+        {useWhisper && !isRecording && !isTranscribing && !useTextInput && (
+          <p className="text-xs text-muted-foreground mb-4">
+            Using Whisper AI for transcription
+          </p>
+        )}
+
+        {error && (
+          <p className="text-amber-500 text-sm mb-4 text-center">{error}</p>
+        )}
+
+        {/* Text input area - Consistent height for both modes */}
+        <div className="w-full mb-6">
+          <Textarea
+            value={useTextInput ? transcript : fullTranscript}
+            onChange={(e) => {
+              setTranscript(e.target.value);
+              if (!useTextInput) {
+                setInterimTranscript("");
+              }
+            }}
+            placeholder={
+              useTextInput 
+                ? "Type your tasks here... e.g., 'Call the dentist tomorrow, urgent. Buy groceries this weekend.'"
+                : isRecording 
+                  ? "Speak now... transcript will appear here" 
+                  : "Your transcribed text will appear here..."
+            }
+            className="min-h-[180px] bg-card/50 backdrop-blur-xl border-border/30 text-lg resize-none"
+            data-testid={useTextInput ? "text-input" : "transcript-textarea"}
+          />
+        </div>
 
         <div className="flex gap-4">
           <Button
