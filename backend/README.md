@@ -53,6 +53,23 @@ Once running, visit:
 - ReDoc: http://127.0.0.1:8010/api/redoc
 - OpenAPI JSON: http://127.0.0.1:8010/api/openapi.json
 
+## Quick API Tests
+
+Test the API endpoints:
+
+```bash
+# Health check
+curl -i http://localhost:8010/api/health
+
+# Create a dump (requires authentication token)
+curl -i -X POST http://localhost:8010/api/dumps \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"source":"text","raw_text":"hello"}'
+```
+
+Note: Most endpoints require authentication. Get a token by logging in through the frontend.
+
 ## Database Schema
 
 See `schema.sql` for the complete database schema. The schema includes:

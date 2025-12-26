@@ -16,29 +16,14 @@ export default function NextSlot({
   onCreateTask,
   onRefreshTasks,
   onClick,
+  currentEnergy = 'medium',
+  onEnergyChange,
 }) {
   const { setNodeRef, isOver } = useDroppable({
     id: "next-slot",
   });
 
   const [editingTask, setEditingTask] = useState(null);
-  const [currentEnergy, setCurrentEnergy] = useState(() => {
-    // Load from localStorage or default to medium
-    try {
-      return localStorage.getItem('user_energy') || 'medium';
-    } catch {
-      return 'medium';
-    }
-  });
-
-  const handleEnergyChange = (energy) => {
-    setCurrentEnergy(energy);
-    try {
-      localStorage.setItem('user_energy', energy);
-    } catch (error) {
-      console.error('Error saving energy preference:', error);
-    }
-  };
 
   const handleEditTask = (taskToEdit) => {
     setEditingTask(taskToEdit);
@@ -56,7 +41,7 @@ export default function NextSlot({
           task={task}
           inboxTasks={inboxTasks || []}
           currentEnergy={currentEnergy}
-          onEnergyChange={handleEnergyChange}
+          onEnergyChange={onEnergyChange}
           onUpdateTask={onUpdateTask}
           onDeleteTask={onDeleteTask}
           onScheduleTask={onScheduleTask}

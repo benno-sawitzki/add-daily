@@ -3,10 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Mic, X, Loader2, Send, Keyboard, Square, Wand2 } from "lucide-react";
 import { motion } from "framer-motion";
-import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import { useNavigate } from "react-router-dom";
+import apiClient from "@/lib/apiClient";
+import { handleApiError } from "@/lib/apiErrorHandler";
+import { toast } from "sonner";
 
 // ============================================
 // VU Meter Ring Component - Dramatic amplitude response
@@ -248,7 +248,8 @@ function useAudioLevel(stream, isRecording) {
 // ============================================
 // Main Voice Overlay Component
 // ============================================
-export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
+export default function VoiceOverlay({ onClose }) {
+  const navigate = useNavigate();
   const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
@@ -258,6 +259,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
   const [recordingTime, setRecordingTime] = useState(0);
   const [useWhisper, setUseWhisper] = useState(false);
   const [audioStream, setAudioStream] = useState(null);
+  const [isSaving, setIsSaving] = useState(false);
   
   const recognitionRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -379,8 +381,8 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
     } catch (err) {
       console.error("Microphone error:", err);
       if (err.name === "NotAllowedError") {
-        setError("Microphone access denied. Please use text input or demo mode.");
-        setDemoMode(true);
+        setError("Microphone access denied. Please use text input.");
+        setUseTextInput(true);
       } else {
         setError(`Could not access microphone: ${err.message}`);
       }
@@ -412,12 +414,8 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         // Auto-process after Whisper transcription completes
         // (handled in transcribeWithWhisper's finally block)
       } else {
-        // Browser speech recognition: auto-process immediately
-        if (currentTranscript.trim()) {
-          setInterimTranscript(""); // Clear interim before processing
-          await onProcess(currentTranscript.trim());
-          onClose();
-        }
+        // Browser speech recognition: text is already in transcript, don't auto-process
+        // User will click submit button to create dump
       }
     }
 
@@ -444,7 +442,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       const extension = mimeType.includes('webm') ? 'webm' : 'mp4';
       formData.append('audio', audioBlob, `recording.${extension}`);
       
-      const response = await axios.post(`${API}/transcribe`, formData, {
+      const response = await apiClient.post('/transcribe', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
       
@@ -452,11 +450,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
         const newTranscript = response.data.transcript.trim();
         const updatedTranscript = transcript.trim() ? `${transcript.trim()} ${newTranscript}` : newTranscript;
         setTranscript(updatedTranscript);
-        // Auto-process after successful transcription
-        if (updatedTranscript.trim()) {
-          await onProcess(updatedTranscript);
-          onClose();
-        }
+        // Don't auto-process - user will click submit button to create dump
       }
     } catch (err) {
       console.error("Whisper error:", err);
@@ -479,10 +473,87 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
       if (isRecording) {
         await stopRecording();
       }
-      await onProcess(finalTranscript);
+
+      // Create dump with auto-extract
+      setIsSaving(true);
+      setError(null);
+      
+      const source = useTextInput ? 'text' : 'voice';
+      const dumpResponse = await apiClient.post('/dumps?auto_extract=1', {
+        source,
+        raw_text: finalTranscript,
+        transcript: null, // Optional field - can be null
+      });
+
+      const dumpId = dumpResponse.data.id;
+      const items = dumpResponse.data.items || [];
+
+      setIsSaving(false);
+      
+      // Items are already extracted, navigate to processing page
       onClose();
+      navigate('/app/process');
     } catch (e) {
-      setError("Failed to process tasks. Please try again.");
+      // ALWAYS log the full error structure in dev mode for debugging
+      console.error("Braindump Save Dump Error - Full Error Object:", {
+        error: e,
+        response: e.response,
+        request: e.request,
+        config: e.config,
+        message: e.message,
+        code: e.code,
+        stack: e.stack,
+        hasResponse: !!e.response,
+        responseStatus: e.response?.status,
+        responseData: e.response?.data,
+        responseHeaders: e.response?.headers,
+      });
+      
+      // Build user-friendly error message
+      let errorMessage = "Save Dump failed";
+      
+      // CRITICAL: Check e.response FIRST - if it exists, it's an HTTP error (not network)
+      if (e.response) {
+        // HTTP error (server responded)
+        const status = e.response.status;
+        const responseData = e.response.data;
+        const detail = responseData?.detail || responseData?.message || '';
+        
+        if (status === 401) {
+          errorMessage = "Save Dump failed: Unauthorized. Please sign in.";
+        } else if (status === 400) {
+          // Show validation error details
+          if (detail) {
+            errorMessage = `Save Dump failed: ${detail}`;
+          } else {
+            errorMessage = "Save Dump failed: Invalid request. Check that all required fields are provided.";
+          }
+        } else if (detail) {
+          errorMessage = `Save Dump failed: ${detail}`;
+        } else {
+          errorMessage = `Save Dump failed: HTTP ${status}`;
+        }
+      } else if (e.request && !e.response) {
+        // Request was made but no response received (network/CORS/timeout)
+        if (e.code === 'ECONNREFUSED') {
+          errorMessage = "Save Dump failed: Cannot reach backend (connection refused)";
+        } else if (e.code === 'ERR_NETWORK' || e.message === 'Network Error') {
+          errorMessage = "Save Dump failed: Cannot reach backend (network error)";
+        } else if (e.code === 'ECONNABORTED') {
+          errorMessage = "Save Dump failed: Request timed out";
+        } else if (e.message && e.message.includes('CORS')) {
+          errorMessage = "Save Dump failed: CORS error. Check backend CORS configuration.";
+        } else {
+          errorMessage = `Save Dump failed: ${e.message || 'Network error'}`;
+        }
+      } else {
+        // No request made (configuration error)
+        errorMessage = `Save Dump failed: ${e.message || 'Unknown error'}`;
+      }
+      
+      setError(errorMessage);
+      toast.error(errorMessage);
+      setIsSaving(false);
     }
   };
 
@@ -535,7 +606,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
               {/* Record Button */}
               <motion.button
                 onClick={() => isRecording ? stopRecording() : startRecording()}
-                disabled={isLoading || isTranscribing}
+                disabled={isSaving || isTranscribing}
                 className={`relative w-28 h-28 rounded-full flex flex-col items-center justify-center transition-all z-10 ${
                   isRecording
                     ? "bg-rose-500 shadow-[0_0_40px_rgba(244,63,94,0.4)]"
@@ -547,7 +618,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
                 whileTap={{ scale: 0.97 }}
                 data-testid="voice-orb"
               >
-                {isLoading ? (
+                {isSaving ? (
                   <Loader2 className="w-8 h-8 text-primary animate-spin" />
                 ) : isTranscribing ? (
                   <>
@@ -572,21 +643,21 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
 
         {/* Status text - Always present */}
         <p className="text-lg mb-4 text-center min-h-[28px]">
-          {isLoading ? (
-            <span className="text-primary">Processing your tasks...</span>
+          {isSaving ? (
+            <span className="text-primary">Saving...</span>
           ) : isTranscribing ? (
             <span className="text-primary">Transcribing with AI...</span>
           ) : isRecording ? (
             <span className="text-rose-400">Recording... Tap to stop</span>
           ) : useTextInput ? (
-            <span className="text-muted-foreground">Type your tasks below</span>
+            <span className="text-muted-foreground">Type your thoughts below</span>
           ) : (
             <span className="text-muted-foreground">Tap to start recording</span>
           )}
         </p>
 
         {/* Toggle buttons - Below status text */}
-        {!isLoading && !isTranscribing && (
+        {!isSaving && !isTranscribing && (
           <div className="flex gap-2 mb-4">
             <Button
               variant={!useTextInput ? "default" : "outline"}
@@ -638,7 +709,7 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
             }}
             placeholder={
               useTextInput 
-                ? "Type your tasks here... e.g., 'Call the dentist tomorrow, urgent. Buy groceries this weekend.'"
+                ? "Type your thoughts here... e.g., 'Call the dentist tomorrow, urgent. Buy groceries this weekend.'"
                 : isRecording 
                   ? "Speak now... transcript will appear here" 
                   : "Your transcribed text will appear here..."
@@ -652,30 +723,30 @@ export default function VoiceOverlay({ onClose, onProcess, isLoading }) {
           <Button
             variant="outline"
             onClick={handleClear}
-            disabled={!fullTranscript || isLoading || isTranscribing}
+            disabled={!fullTranscript || isSaving || isTranscribing}
             data-testid="clear-transcript"
           >
             Clear
           </Button>
           <Button
             onClick={handleSubmit}
-            disabled={!fullTranscript.trim() || isLoading || isTranscribing || isRecording}
+            disabled={!fullTranscript.trim() || isSaving || isTranscribing || isRecording}
             className="gap-2 px-8"
             data-testid="submit-voice"
           >
-            {isLoading ? (
+            {isSaving ? (
               <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <Send className="w-4 h-4" />
             )}
-            Process Tasks
+            {isSaving ? 'Saving...' : 'Save Dump'}
           </Button>
         </div>
 
         <p className="mt-8 text-sm text-muted-foreground text-center max-w-md">
           {useTextInput 
-            ? "Tip: Mention urgency and importance. Example: \"Call dentist urgently, very important\""
-            : "Tip: Record your tasks, then stop to transcribe. You can edit the text before processing."
+            ? "Tip: Just type your thoughts. They'll be extracted into items that you can convert to tasks."
+            : "Tip: Record your thoughts, then stop to transcribe. You can edit the text before saving."
           }
         </p>
       </div>

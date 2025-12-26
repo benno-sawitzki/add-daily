@@ -2,7 +2,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Q
 from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
 import asyncpg
 import ssl
 import os
@@ -69,6 +69,48 @@ if ENV == 'production':
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 else:
     app = FastAPI(docs_url="/api/docs", redoc_url="/api/redoc", openapi_url="/api/openapi.json")
+
+# CORS configuration - MUST be added BEFORE routes are defined
+# Note: When allow_credentials=True, you cannot use allow_origins=['*']
+# Must specify exact origins. Default includes common development URLs.
+default_origins = ['http://localhost:3000', 'http://127.0.0.1:3000']
+cors_origins_str = os.environ.get('CORS_ORIGINS', ','.join(default_origins))
+
+if cors_origins_str == '*':
+    # If '*' is specified, disable credentials (security requirement)
+    cors_origins = ['*']
+    allow_creds = False
+else:
+    # Parse comma-separated origins
+    cors_origins = [origin.strip() for origin in cors_origins_str.split(',') if origin.strip()]
+    allow_creds = True
+
+# Add CORS middleware to main app - applies to ALL routes including /api/*
+# Must be added BEFORE routes are defined
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["authorization", "content-type", "accept", "origin", "x-requested-with"],
+    expose_headers=["*"],
+    max_age=600,  # Cache preflight for 10 minutes
+)
+
+# Request logging middleware (dev only) - MUST be after CORS middleware
+if ENV != 'production':
+    @app.middleware("http")
+    async def log_requests(request, call_next):
+        """Log all requests in development mode"""
+        import time
+        start_time = time.time()
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        logger.info(
+            f"{request.method} {request.url.path} → {response.status_code} "
+            f"({process_time:.3f}s)"
+        )
+        return response
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -250,6 +292,8 @@ class TaskUpdate(BaseModel):
     scheduled_time: Optional[str] = None
     duration: Optional[int] = None
     status: Optional[str] = None
+    sort_order: Optional[int] = None  # Display order (0-based index)
+    energy_required: Optional[str] = None  # low, medium, high
 
 class VoiceInput(BaseModel):
     transcript: str
@@ -776,11 +820,36 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         # Build dynamic update query with proper parameterization
         # Only allow updating specific fields that exist in the database
         allowed_fields = {'title', 'description', 'priority', 'urgency', 'importance', 
-                         'scheduled_date', 'scheduled_time', 'duration', 'status', 'expires_at'}
+                         'scheduled_date', 'scheduled_time', 'duration', 'status', 'expires_at', 'sort_order', 'energy_required'}
         filtered_data = {k: v for k, v in update_data.items() if k in allowed_fields}
         
         if not filtered_data:
             raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        # Check current status before updating (to detect status changes)
+        current_task = await conn.fetchrow("SELECT status FROM tasks WHERE id = $1 AND user_id = $2", task_id, user["id"])
+        if not current_task:
+            raise HTTPException(status_code=404, detail="Task not found or you don't have permission")
+        
+        current_status = current_task.get('status')
+        new_status = filtered_data.get('status')
+        
+        # Enforce Next Today cap (1 task max) when changing status to 'next'
+        if new_status == 'next' and current_status != 'next':
+            next_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'next'",
+                user["id"]
+            )
+            NEXT_TODAY_CAP = 1
+            if next_count >= NEXT_TODAY_CAP:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Next Today is full ({NEXT_TODAY_CAP}). Finish or move something out first."
+                )
+        
+        # Check if status is being changed to 'completed' or from 'completed'
+        status_changing_to_completed = new_status == 'completed' and current_status != 'completed'
+        status_changing_from_completed = current_status == 'completed' and new_status and new_status != 'completed'
         
         set_clauses = []
         values = []
@@ -797,18 +866,50 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
             values.append(value)
             param_num += 1
         
+        # Set completed_at when marking as completed, clear it when uncompleting
+        completed_at_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'completed_at')"""
+        )
+        
+        if completed_at_exists:
+            if status_changing_to_completed:
+                set_clauses.append(f"completed_at = ${param_num}")
+                values.append(datetime.now(timezone.utc))
+                param_num += 1
+            elif status_changing_from_completed:
+                set_clauses.append(f"completed_at = ${param_num}")
+                values.append(None)
+                param_num += 1
+        
         # Add task_id and user_id as final parameters
         where_clause = f"id = ${param_num} AND user_id = ${param_num + 1}"
         values.extend([task_id, user["id"]])
         
+        # Check if sort_order column exists (completed_at already checked above)
+        sort_order_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'sort_order')"""
+        )
+        energy_required_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
+        )
+        
+        # Build RETURNING clause dynamically
+        base_returning = "id, user_id, title, description, priority, urgency, importance, scheduled_date::text, scheduled_time, duration, status, expires_at::text"
+        completed_at_returning = ", completed_at::text" if completed_at_exists else ""
+        sort_order_returning = ", sort_order" if sort_order_exists else ""
+        energy_required_returning = ", energy_required" if energy_required_exists else ""
+        created_at_returning = ", created_at::text"
+        returning_clause = base_returning + completed_at_returning + sort_order_returning + energy_required_returning + created_at_returning
+        
         # Use RETURNING to get updated row in a single query (much faster)
         query = f"""UPDATE tasks SET {', '.join(set_clauses)} 
                     WHERE {where_clause}
-                    RETURNING id, user_id, title, description, priority, urgency, importance, 
-                              scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text"""
+                    RETURNING {returning_clause}"""
         
         try:
-            logger.info(f"Updating task {task_id} with {len(filtered_data)} fields")
+            logger.info(f"Updating task {task_id} with {len(filtered_data)} fields: {list(filtered_data.keys())}")
+            if 'urgency' in filtered_data or 'importance' in filtered_data:
+                logger.info(f"  Urgency: {filtered_data.get('urgency')}, Importance: {filtered_data.get('importance')}")
             row = await conn.fetchrow(query, *values)
             
             if not row:
@@ -818,10 +919,18 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error updating task {task_id}: {str(e)}", exc_info=True)
-            logger.error(f"Query was: {query}")
-            logger.error(f"Values were: {values}")
-            raise HTTPException(status_code=500, detail=f"Failed to update task: {str(e)}")
+            error_details = {
+                "message": str(e),
+                "type": type(e).__name__,
+                "task_id": task_id,
+                "user_id": user.get("id"),
+                "query": query[:200] if len(query) > 200 else query,
+            }
+            logger.error(f"Error updating task {task_id}: {error_details}", exc_info=True)
+            error_msg = f"Failed to update task: {str(e)}"
+            if ENV == 'development':
+                error_msg += f" (Type: {type(e).__name__})"
+            raise HTTPException(status_code=500, detail=error_msg)
 
 @api_router.delete("/tasks/{task_id}")
 async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
@@ -831,6 +940,241 @@ async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
     if result == "DELETE 0":
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted"}
+
+# Metrics endpoints
+@api_router.get("/metrics/done")
+async def get_done_metrics(
+    start: str = Query(..., description="Start date (ISO format: YYYY-MM-DD)"),
+    end: str = Query(..., description="End date (ISO format: YYYY-MM-DD)"),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Get count of completed tasks within a date range.
+    Uses completed_at timestamp (single source of truth for "done").
+    
+    Migration SQL if completed_at doesn't exist:
+    ```
+    ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE NULL;
+    CREATE INDEX IF NOT EXISTS idx_tasks_user_id_completed_at ON public.tasks(user_id, completed_at) WHERE completed_at IS NOT NULL;
+    ```
+    """
+    # Auth guard
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Check if completed_at column exists
+        completed_at_exists = await conn.fetchval(
+            """SELECT EXISTS (
+               SELECT 1 FROM information_schema.columns 
+               WHERE table_schema = 'public' 
+               AND table_name = 'tasks' 
+               AND column_name = 'completed_at'
+            )"""
+        )
+        
+        if not completed_at_exists:
+            # Return 0 count with error indicator (non-blocking)
+            return {
+                "count": 0,
+                "_error": "completed_at column does not exist. Please run migration: ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP WITH TIME ZONE NULL;"
+            }
+        
+        try:
+            # Parse ISO date strings to timestamps for range query
+            # Start: beginning of start date
+            start_dt = datetime.fromisoformat(start.replace('Z', '+00:00')) if 'T' in start else datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            # End: end of end date (23:59:59.999)
+            end_dt = datetime.fromisoformat(end.replace('Z', '+00:00')) if 'T' in end else datetime.strptime(end, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            
+            # Query tasks with completed_at within range
+            count = await conn.fetchval(
+                """SELECT COUNT(*) FROM tasks 
+                   WHERE user_id = $1 
+                   AND completed_at IS NOT NULL
+                   AND completed_at >= $2 
+                   AND completed_at <= $3""",
+                user["id"], start_dt, end_dt
+            )
+            
+            return {"count": count or 0}
+        except Exception as e:
+            error_details = {
+                "message": str(e),
+                "type": type(e).__name__,
+                "user_id": user.get("id"),
+                "start": start,
+                "end": end,
+            }
+            logger.error(f"Error fetching done metrics: {error_details}", exc_info=True)
+            # Return 0 with error indicator (non-blocking)
+            return {
+                "count": 0,
+                "_error": f"Failed to fetch done metrics: {str(e)}"
+            }
+
+@api_router.get("/metrics/focus")
+async def get_focus_metrics(
+    start: str = Query(..., description="Start date (ISO format: YYYY-MM-DD)"),
+    end: str = Query(..., description="End date (ISO format: YYYY-MM-DD)"),
+    user: dict = Depends(get_current_user)
+):
+    """
+    Get focus session count and total deep work minutes within a date range.
+    Uses focus_sessions table (ended_at timestamp).
+    """
+    # Auth guard
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Check if focus_sessions table exists
+        table_exists = await conn.fetchval(
+            """SELECT EXISTS (
+               SELECT 1 FROM information_schema.tables 
+               WHERE table_schema = 'public' 
+               AND table_name = 'focus_sessions'
+            )"""
+        )
+        
+        if not table_exists:
+            # Return 0 values with error indicator (non-blocking)
+            return {
+                "count": 0,
+                "totalMinutes": 0,
+                "_error": "focus_sessions table does not exist. Please run migration to create it."
+            }
+        
+        try:
+            # Parse ISO date strings to timestamps
+            start_dt = datetime.fromisoformat(start.replace('Z', '+00:00')) if 'T' in start else datetime.strptime(start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            end_dt = datetime.fromisoformat(end.replace('Z', '+00:00')) if 'T' in end else datetime.strptime(end, "%Y-%m-%d").replace(hour=23, minute=59, second=59, microsecond=999999, tzinfo=timezone.utc)
+            
+            # Query focus sessions within range (by ended_at)
+            result = await conn.fetchrow(
+                """SELECT COUNT(*) as count, COALESCE(SUM(duration_minutes), 0) as total_minutes
+                   FROM focus_sessions 
+                   WHERE user_id = $1 
+                   AND ended_at >= $2 
+                   AND ended_at <= $3""",
+                user["id"], start_dt, end_dt
+            )
+            
+            return {
+                "count": result["count"] or 0,
+                "totalMinutes": int(result["total_minutes"] or 0)
+            }
+        except Exception as e:
+            error_details = {
+                "message": str(e),
+                "type": type(e).__name__,
+                "user_id": user.get("id"),
+            }
+            logger.error(f"Error fetching focus metrics: {error_details}", exc_info=True)
+            # Return 0 with error indicator (non-blocking)
+            return {
+                "count": 0,
+                "totalMinutes": 0,
+                "_error": f"Failed to fetch focus metrics: {str(e)}"
+            }
+
+# Batch update endpoint for sort_order
+@api_router.post("/tasks/batch-update-sort-order")
+async def batch_update_sort_order(
+    request: dict,  # {updates: List[{task_id: str, sort_order: int}]}
+    user: dict = Depends(get_current_user)
+):
+    """
+    Batch update sort_order for multiple tasks.
+    Used for drag-and-drop reordering.
+    
+    Migration SQL (run in Supabase - see backend/migrations/add_sort_order_column.sql):
+    ```
+    ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS sort_order INTEGER NULL;
+    CREATE INDEX IF NOT EXISTS tasks_user_sort_order_idx ON public.tasks(user_id, sort_order) WHERE sort_order IS NOT NULL;
+    ```
+    """
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    updates = request.get("updates", [])
+    if not updates:
+        return {"success": True, "updated": 0}
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Check if sort_order column exists
+        sort_order_exists = await conn.fetchval(
+            """SELECT EXISTS (
+               SELECT 1 FROM information_schema.columns 
+               WHERE table_schema = 'public' 
+               AND table_name = 'tasks' 
+               AND column_name = 'sort_order'
+            )"""
+        )
+        
+        if not sort_order_exists:
+            error_msg = "sort_order column does not exist. Please run migration: ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS sort_order INTEGER NULL;"
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
+        
+        try:
+            async with conn.transaction():
+                # Use a single batch update with CASE WHEN for efficiency
+                task_ids = [str(update['task_id']) for update in updates]
+                case_clauses = []
+                params = []
+                param_num = 1
+                
+                for update in updates:
+                    task_id = str(update['task_id'])
+                    sort_order = int(update['sort_order'])
+                    case_clauses.append(f"WHEN ${param_num}::text THEN ${param_num + 1}::integer")
+                    params.extend([task_id, sort_order])
+                    param_num += 2
+                
+                # Build the query - only update tasks that belong to the current user
+                query = f"""
+                    UPDATE tasks 
+                    SET sort_order = CASE id
+                        {' '.join(case_clauses)}
+                        ELSE sort_order
+                    END
+                    WHERE id = ANY(${param_num}::text[]) 
+                    AND user_id = ${param_num + 1}::text
+                """
+                params.extend([task_ids, user["id"]])
+                
+                result = await conn.execute(query, *params)
+                
+                # Check if all tasks were updated
+                updated_count = int(result.split()[-1])  # "UPDATE N" -> N
+                
+                if updated_count < len(updates):
+                    logger.warning(f"Only {updated_count} of {len(updates)} tasks updated. Some tasks may not exist or belong to another user.")
+                
+                return {
+                    "success": True,
+                    "updated": updated_count,
+                    "requested": len(updates)
+                }
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            error_details = {
+                "message": str(e),
+                "type": type(e).__name__,
+                "user_id": user.get("id"),
+                "update_count": len(updates),
+            }
+            logger.error(f"Error batch updating sort_order: {error_details}", exc_info=True)
+            error_msg = f"Failed to update task order: {str(e)}"
+            if ENV == 'development':
+                error_msg += f" (Error type: {type(e).__name__})"
+            raise HTTPException(status_code=500, detail=error_msg)
 
 # Voice processing - Queue mode (returns tasks for review, doesn't save yet)
 @api_router.post("/tasks/process-voice-queue")
@@ -1273,45 +1617,117 @@ async def export_ical(user: dict = Depends(get_current_user)):
 # Task status management endpoints
 @api_router.post("/tasks/{task_id}/make-next")
 async def make_task_next(task_id: str, user: dict = Depends(get_current_user)):
-    """Set a task as 'next' and move any existing 'next' task back to 'inbox'"""
+    """
+    Set a task as 'next' (Next Today). Enforces hard cap of 1 task max.
+    
+    This endpoint uses minimal schema - only updates 'status' field.
+    No optional columns (completed_at, effort, sort_order) are required.
+    
+    Cap enforcement:
+    - Next Today hard cap = 1 task
+    - If task is already 'next', allow (no-op if within cap)
+    - If adding would exceed 1, return 400 with clear message
+    """
+    # Auth guard
+    if not user or not user.get("id"):
+        logger.error("make_task_next: user or user.id is missing")
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
     pool = await get_db_pool()
     
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            # Check if task exists and belongs to user
-            task = await conn.fetchrow(
-                "SELECT id FROM tasks WHERE id = $1 AND user_id = $2",
-                task_id, user["id"]
-            )
-            if not task:
-                raise HTTPException(status_code=404, detail="Task not found")
-            
-            # Find existing 'next' task for this user and move it back to inbox
-            existing_next = await conn.fetchrow(
-                "SELECT id FROM tasks WHERE user_id = $1 AND status = 'next'",
-                user["id"]
-            )
-            if existing_next:
-                await conn.execute(
-                    "UPDATE tasks SET status = 'inbox' WHERE id = $1 AND user_id = $2",
-                    existing_next["id"], user["id"]
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # Check if task exists and belongs to user
+                task = await conn.fetchrow(
+                    "SELECT id, status FROM tasks WHERE id = $1 AND user_id = $2",
+                    task_id, user["id"]
                 )
-            
-            # Set the requested task as 'next'
-            await conn.execute(
-                "UPDATE tasks SET status = 'next' WHERE id = $1 AND user_id = $2",
-                task_id, user["id"]
-            )
-            
-            # Return the updated task
-            updated_task = await conn.fetchrow(
-                """SELECT id, user_id, title, description, priority, urgency, importance, energy_required,
-                   scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
-                   FROM tasks WHERE id = $1 AND user_id = $2""",
-                task_id, user["id"]
-            )
-    
-    return dict(updated_task)
+                if not task:
+                    raise HTTPException(status_code=404, detail="Task not found or you don't have permission")
+                
+                # Count existing 'next' tasks (excluding the current task if it's already 'next')
+                count_query = "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'next'"
+                if task.get('status') == 'next':
+                    # Task is already 'next', exclude it from count
+                    count_query += " AND id != $2"
+                    next_count = await conn.fetchval(count_query, user["id"], task_id)
+                else:
+                    next_count = await conn.fetchval(count_query, user["id"])
+                
+                # Enforce hard cap of 1 task
+                NEXT_TODAY_CAP = 1
+                if next_count >= NEXT_TODAY_CAP:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Next Today is full ({NEXT_TODAY_CAP}). Finish or move something out first."
+                    )
+                
+                # Set the requested task as 'next' (minimal update - only status)
+                await conn.execute(
+                    "UPDATE tasks SET status = 'next' WHERE id = $1 AND user_id = $2",
+                    task_id, user["id"]
+                )
+                
+                # Return the updated task with dynamic column selection
+                # Check which columns exist for graceful degradation
+                effort_exists = await conn.fetchval(
+                    """SELECT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'effort')"""
+                )
+                energy_required_exists = await conn.fetchval(
+                    """SELECT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
+                )
+                completed_at_exists = await conn.fetchval(
+                    """SELECT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'completed_at')"""
+                )
+                sort_order_exists = await conn.fetchval(
+                    """SELECT EXISTS (SELECT 1 FROM information_schema.columns 
+                       WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'sort_order')"""
+                )
+                
+                # Build SELECT clause dynamically
+                base_fields = "id, user_id, title, description, priority, urgency, importance, scheduled_date::text, scheduled_time, duration, status, expires_at::text"
+                
+                # Add optional fields only if they exist
+                optional_fields = []
+                if effort_exists:
+                    optional_fields.append("effort")
+                elif energy_required_exists:
+                    optional_fields.append("energy_required")
+                
+                if completed_at_exists:
+                    optional_fields.append("completed_at::text")
+                
+                if sort_order_exists:
+                    optional_fields.append("sort_order")
+                
+                optional_fields.append("created_at::text")
+                
+                select_fields = base_fields + (", " + ", ".join(optional_fields) if optional_fields else "")
+                
+                updated_task = await conn.fetchrow(
+                    f"SELECT {select_fields} FROM tasks WHERE id = $1 AND user_id = $2",
+                    task_id, user["id"]
+                )
+        
+        return dict(updated_task)
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_details = {
+            "message": str(e),
+            "type": type(e).__name__,
+            "task_id": task_id,
+            "user_id": user.get("id"),
+        }
+        logger.error(f"Error in make_task_next: {error_details}", exc_info=True)
+        error_msg = f"Failed to set task as next: {str(e)}"
+        if ENV == 'development':
+            error_msg += f" (Type: {type(e).__name__})"
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @api_router.post("/tasks/{task_id}/move-to-inbox")
@@ -1379,6 +1795,856 @@ async def move_task_to_later(task_id: str, user: dict = Depends(get_current_user
     return dict(updated_task)
 
 
+# ===== Dump (Transmission) System =====
+
+# Dump models
+class DumpItem(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    dump_id: str
+    user_id: str
+    text: str
+    status: str = Field(default="new", description="Status: 'new', 'promoted', 'dismissed'")
+    created_task_id: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class Dump(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    source: str = Field(..., description="Source type: 'voice' or 'text'")
+    raw_text: str
+    transcript: Optional[str] = None
+    clarified_at: Optional[str] = None
+    archived_at: Optional[str] = None
+    items: Optional[List[DumpItem]] = Field(default_factory=list, description="Extracted items")
+
+class DumpCreate(BaseModel):
+    source: str = Field(..., description="Source type: 'voice' or 'text'")
+    raw_text: str
+    transcript: Optional[str] = None
+
+class DumpItemCreate(BaseModel):
+    text: str
+    status: Optional[str] = Field(default="new")
+    snooze_until: Optional[str] = None
+
+class DumpItemUpdate(BaseModel):
+    text: Optional[str] = None
+    status: Optional[str] = None
+    snooze_until: Optional[str] = None
+    linked_task_id: Optional[str] = None
+
+class SnoozeRequest(BaseModel):
+    snooze_until: str  # ISO datetime string
+
+class PromoteRequest(BaseModel):
+    target: str = Field(..., description="Target: 'inbox', 'next_today', or 'later'")
+
+class PromoteBulkRequest(BaseModel):
+    item_ids: List[str] = Field(..., description="List of dump_item IDs to promote")
+    target: str = Field(..., description="Target: 'inbox', 'next_today', or 'later'")
+
+class TriageRequest(BaseModel):
+    target: str = Field(..., description="Target: 'INBOX', 'NEXT_TODAY', or 'LATER'")
+    item_ids: Optional[List[str]] = None  # Optional list of item IDs to triage
+
+# Helper function to extract items from raw_text
+async def extract_items_from_dump(dump_id: str, raw_text: str, user_id: str, pool) -> list:
+    """Extract items from raw_text and create dump_items. Returns list of created items."""
+    items_text = []
+    
+    # Split by commas first
+    comma_split = [item.strip() for item in raw_text.split(',') if item.strip()]
+    
+    # Then split each by newlines
+    for item in comma_split:
+        lines = [line.strip() for line in item.split('\n') if line.strip()]
+        items_text.extend(lines)
+    
+    # Handle bullet points (split each line that starts with bullet markers)
+    final_items = []
+    for line in items_text:
+        # Check for bullet points (-, *, •, etc.)
+        for marker in ['- ', '* ', '• ', '— ', '– ']:
+            if line.startswith(marker):
+                item_text = line[len(marker):].strip()
+                if item_text:
+                    final_items.append(item_text)
+                break
+        else:
+            # Regular line
+            final_items.append(line)
+    
+    # Dedupe (preserve order)
+    seen = set()
+    deduped_items = []
+    for item in final_items:
+        if item and item.lower() not in seen:
+            seen.add(item.lower())
+            deduped_items.append(item)
+    
+    # If we got no items from parsing, create one item with the full text
+    if not deduped_items:
+        deduped_items = [raw_text] if raw_text else []
+    
+    # Create dump_items with status='new'
+    created_items = []
+    created_at = datetime.now(timezone.utc)
+    
+    async with pool.acquire() as conn:
+        for item_text in deduped_items:
+            item_id = str(uuid.uuid4())
+            await conn.execute(
+                """INSERT INTO dump_items (id, dump_id, user_id, text, status, created_at)
+                   VALUES ($1, $2, $3, $4, 'new', $5)""",
+                item_id, dump_id, user_id, item_text, created_at
+            )
+            
+            row = await conn.fetchrow(
+                """SELECT id, dump_id, user_id, text, status, created_task_id, created_at::text
+                   FROM dump_items WHERE id = $1""",
+                item_id
+            )
+            created_items.append(dict(row))
+        
+        # Set clarified_at on dump
+        await conn.execute(
+            "UPDATE dumps SET clarified_at = $1 WHERE id = $2",
+            created_at, dump_id
+        )
+    
+    return created_items
+
+# Dump endpoints
+@api_router.post("/dumps")
+async def create_dump(
+    dump_data: DumpCreate, 
+    user: dict = Depends(get_current_user),
+    auto_extract: Optional[int] = Query(0, description="Auto-extract items (1=true, 0=false)")
+):
+    """Create a new dump (capture session). If auto_extract=1, also extracts items."""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    if dump_data.source not in ['voice', 'text']:
+        raise HTTPException(status_code=400, detail="Source must be 'voice' or 'text'")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        dump_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        
+        await conn.execute(
+            """INSERT INTO dumps (id, user_id, created_at, source, raw_text, transcript)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            dump_id, user["id"], created_at, dump_data.source, dump_data.raw_text, dump_data.transcript
+        )
+        
+        dump_row = await conn.fetchrow(
+            """SELECT id, user_id, created_at::text, source, raw_text, transcript, 
+                      clarified_at::text, archived_at::text
+               FROM dumps WHERE id = $1""",
+            dump_id
+        )
+    
+    dump_dict = dict(dump_row)
+    
+    # Auto-extract if requested
+    items = []
+    if auto_extract == 1:
+        items = await extract_items_from_dump(dump_id, dump_data.raw_text, user["id"], pool)
+    
+    dump_dict["items"] = items
+    
+    return dump_dict
+
+@api_router.get("/dumps", response_model=List[Dump])
+async def get_dumps(archived: Optional[bool] = Query(None, description="Filter by archived status"), 
+                    user: dict = Depends(get_current_user)):
+    """Get all dumps for the current user, newest first. Returns [] if table doesn't exist (dev mode)."""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Check if dumps table exists - if not, return empty list (graceful degradation)
+            table_exists = await conn.fetchval(
+                """SELECT EXISTS (
+                   SELECT 1 FROM information_schema.tables 
+                   WHERE table_schema = 'public' 
+                   AND table_name = 'dumps'
+                )"""
+            )
+            
+            if not table_exists:
+                logger.warning(f"dumps table does not exist for user {user['id']}. Returning empty list.")
+                return []
+        except Exception as e:
+            logger.error(f"Error checking for dumps table: {e}")
+            # In dev mode, return empty list instead of crashing
+            if ENV != 'production':
+                return []
+            raise HTTPException(status_code=500, detail="Database error")
+        
+        try:
+            if archived is None:
+                # Get non-archived dumps by default
+                rows = await conn.fetch(
+                    """SELECT id, user_id, created_at::text, source, raw_text, transcript,
+                              clarified_at::text, archived_at::text
+                       FROM dumps 
+                       WHERE user_id = $1 AND archived_at IS NULL
+                       ORDER BY created_at DESC""",
+                    user["id"]
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT id, user_id, created_at::text, source, raw_text, transcript,
+                              clarified_at::text, archived_at::text
+                       FROM dumps 
+                       WHERE user_id = $1 AND (archived_at IS NULL) = $2
+                       ORDER BY created_at DESC""",
+                    user["id"], not archived
+                )
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "relation" in error_str or "table" in error_str or "column" in error_str:
+                logger.warning(f"Database schema issue with dumps table: {e}. Returning empty list.")
+                # In dev mode, return empty list instead of crashing
+                if ENV != 'production':
+                    return []
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Database schema error: {str(e)}"
+                )
+            logger.error(f"Error fetching dumps: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error fetching dumps: {str(e)}"
+            )
+
+@api_router.patch("/dumps/{dump_id}", response_model=Dump)
+async def update_dump(dump_id: str, dump_update: dict, user: dict = Depends(get_current_user)):
+    """Update a dump (e.g., archive, clarify)"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Build update query dynamically
+        allowed_fields = {'transcript', 'clarified_at', 'archived_at'}
+        update_data = {k: v for k, v in dump_update.items() if k in allowed_fields}
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        set_clauses = []
+        values = []
+        param_num = 1
+        
+        for key, value in update_data.items():
+            if key == 'clarified_at' or key == 'archived_at':
+                if value:
+                    set_clauses.append(f"{key} = ${param_num}")
+                    values.append(datetime.fromisoformat(value.replace('Z', '+00:00')) if isinstance(value, str) else value)
+                else:
+                    set_clauses.append(f"{key} = NULL")
+                param_num += 1 if value else 0
+            else:
+                set_clauses.append(f"{key} = ${param_num}")
+                values.append(value)
+                param_num += 1
+        
+        where_clause = f"id = ${param_num} AND user_id = ${param_num + 1}"
+        values.extend([dump_id, user["id"]])
+        
+        query = f"""UPDATE dumps SET {', '.join(set_clauses)} 
+                    WHERE {where_clause}
+                    RETURNING id, user_id, created_at::text, source, raw_text, transcript,
+                              clarified_at::text, archived_at::text"""
+        
+        row = await conn.fetchrow(query, *values)
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+    
+    return dict(row)
+
+@api_router.delete("/dumps/{dump_id}")
+async def delete_dump(dump_id: str, user: dict = Depends(get_current_user)):
+    """Delete a dump and its items (cascade delete)"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user (authorization check)
+        dump = await conn.fetchrow(
+            "SELECT id FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        # Delete dump (cascade will delete dump_items automatically due to ON DELETE CASCADE)
+        result = await conn.execute(
+            "DELETE FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        
+        if result == "DELETE 0":
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+    
+    return {"message": "Dump deleted successfully"}
+
+# Dump Items endpoints
+@api_router.post("/dumps/{dump_id}/items", response_model=DumpItem)
+async def create_dump_item(dump_id: str, item_data: DumpItemCreate, user: dict = Depends(get_current_user)):
+    """Create a new item in a dump"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user
+        dump = await conn.fetchrow(
+            "SELECT id FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        item_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        status = item_data.status or "new"
+        
+        snooze_until_value = None
+        if item_data.snooze_until:
+            snooze_until_value = datetime.fromisoformat(item_data.snooze_until.replace('Z', '+00:00'))
+        
+        await conn.execute(
+            """INSERT INTO dump_items (id, dump_id, created_at, text, status, snooze_until)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            item_id, dump_id, created_at, item_data.text, status, snooze_until_value
+        )
+        
+        row = await conn.fetchrow(
+            """SELECT id, dump_id, created_at::text, text, status, 
+                      snooze_until::text, linked_task_id
+               FROM dump_items WHERE id = $1""",
+            item_id
+        )
+    
+    return dict(row)
+
+@api_router.get("/dumps/{dump_id}/items", response_model=List[DumpItem])
+async def get_dump_items(dump_id: str, user: dict = Depends(get_current_user)):
+    """Get all items for a dump"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user
+        dump = await conn.fetchrow(
+            "SELECT id FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        rows = await conn.fetch(
+            """SELECT id, dump_id, created_at::text, text, status,
+                      snooze_until::text, linked_task_id
+               FROM dump_items 
+               WHERE dump_id = $1
+               ORDER BY created_at ASC""",
+            dump_id
+        )
+    
+    return [dict(row) for row in rows]
+
+@api_router.patch("/dump-items/{item_id}", response_model=DumpItem)
+async def update_dump_item(item_id: str, item_update: DumpItemUpdate, user: dict = Depends(get_current_user)):
+    """Update a dump item"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user's dump
+        item = await conn.fetchrow(
+            """SELECT dump_items.id FROM dump_items
+               JOIN dumps ON dump_items.dump_id = dumps.id
+               WHERE dump_items.id = $1 AND dumps.user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        update_data = {k: v for k, v in item_update.model_dump().items() if v is not None}
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No update data provided")
+        
+        set_clauses = []
+        values = []
+        param_num = 1
+        
+        for key, value in update_data.items():
+            if key == 'snooze_until':
+                if value:
+                    set_clauses.append(f"{key} = ${param_num}")
+                    values.append(datetime.fromisoformat(value.replace('Z', '+00:00')))
+                else:
+                    set_clauses.append(f"{key} = NULL")
+                param_num += 1 if value else 0
+            else:
+                set_clauses.append(f"{key} = ${param_num}")
+                values.append(value)
+                param_num += 1
+        
+        where_clause = f"id = ${param_num}"
+        values.append(item_id)
+        
+        query = f"""UPDATE dump_items SET {', '.join(set_clauses)} 
+                    WHERE {where_clause}
+                    RETURNING id, dump_id, created_at::text, text, status,
+                              snooze_until::text, linked_task_id"""
+        
+        row = await conn.fetchrow(query, *values)
+    
+    return dict(row)
+
+@api_router.post("/dumps/{dump_id}/extract")
+async def extract_dump(dump_id: str, user: dict = Depends(get_current_user)):
+    """Extract items from dump.raw_text into dump_items (does NOT create tasks)"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user
+        dump = await conn.fetchrow(
+            """SELECT id, raw_text FROM dumps 
+               WHERE id = $1 AND user_id = $2""",
+            dump_id, user["id"]
+        )
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        raw_text = dump.get('raw_text', '')
+    
+    # Use shared extraction logic
+    items = await extract_items_from_dump(dump_id, raw_text, user["id"], pool)
+    
+    return {"items": items}
+
+@api_router.post("/dump-items/{item_id}/promote", response_model=Task)
+async def promote_dump_item(item_id: str, promote_request: PromoteRequest, user: dict = Depends(get_current_user)):
+    """Promote a dump_item to a task (creates task)"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    if promote_request.target not in ['inbox', 'next_today', 'later']:
+        raise HTTPException(status_code=400, detail="Target must be 'inbox', 'next_today', or 'later'")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user (authorization check)
+        item = await conn.fetchrow(
+            """SELECT id, text, status FROM dump_items
+               WHERE id = $1 AND user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        # Check if already promoted
+        if item.get('status') == 'promoted':
+            raise HTTPException(status_code=400, detail="Dump item already promoted")
+        
+        # Map target to task status
+        task_status = 'inbox' if promote_request.target == 'inbox' else ('next' if promote_request.target == 'next_today' else 'later')
+        
+        # Check Inbox cap if target is inbox
+        if task_status == 'inbox':
+            inbox_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'inbox'",
+                user["id"]
+            )
+            INBOX_CAP = 5
+            if inbox_count >= INBOX_CAP:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Inbox is full. Promote to Later or Next Today."
+                )
+        
+        # Check Next Today cap if target is next_today
+        if task_status == 'next':
+            next_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'next'",
+                user["id"]
+            )
+            NEXT_TODAY_CAP = 1
+            if next_count >= NEXT_TODAY_CAP:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Next Today is full ({NEXT_TODAY_CAP}). Finish or move something out first."
+                )
+        
+        # Create task
+        task_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        
+        await conn.execute(
+            """INSERT INTO tasks (id, user_id, title, status, created_at, priority, urgency, importance, duration)
+               VALUES ($1, $2, $3, $4, $5, 2, 2, 2, 30)""",
+            task_id, user["id"], item.get('text', 'Untitled Task'), task_status, created_at
+        )
+        
+        # Update dump_item: status='promoted', created_task_id=task_id
+        await conn.execute(
+            """UPDATE dump_items 
+               SET status = 'promoted', created_task_id = $1
+               WHERE id = $2""",
+            task_id, item_id
+        )
+        
+        # Fetch created task
+        task_row = await conn.fetchrow(
+            """SELECT id, user_id, title, description, priority, urgency, importance, 
+                      scheduled_date::text, scheduled_time, duration, status, created_at::text
+               FROM tasks WHERE id = $1""",
+            task_id
+        )
+    
+    return dict(task_row)
+
+@api_router.post("/dump-items/promote-bulk")
+async def promote_dump_items_bulk(promote_request: PromoteBulkRequest, user: dict = Depends(get_current_user)):
+    """Promote multiple dump_items to tasks"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    if promote_request.target not in ['inbox', 'next_today', 'later']:
+        raise HTTPException(status_code=400, detail="Target must be 'inbox', 'next_today', or 'later'")
+    
+    if not promote_request.item_ids:
+        raise HTTPException(status_code=400, detail="item_ids cannot be empty")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify all items belong to user (authorization check)
+        item_ids_placeholder = ','.join(f'${i+1}' for i in range(len(promote_request.item_ids)))
+        items = await conn.fetch(
+            f"""SELECT id, text, status FROM dump_items
+               WHERE id IN ({item_ids_placeholder}) AND user_id = ${len(promote_request.item_ids) + 1}""",
+            *promote_request.item_ids, user["id"]
+        )
+        
+        if len(items) != len(promote_request.item_ids):
+            raise HTTPException(status_code=404, detail="Some dump items not found or you don't have permission")
+        
+        # Filter out already promoted items
+        items_to_promote = [item for item in items if item.get('status') != 'promoted']
+        
+        if not items_to_promote:
+            raise HTTPException(status_code=400, detail="All selected items are already promoted")
+        
+        # Map target to task status
+        task_status = 'inbox' if promote_request.target == 'inbox' else ('next' if promote_request.target == 'next_today' else 'later')
+        
+        # Check Next Today cap if target is next_today
+        if task_status == 'next':
+            next_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'next'",
+                user["id"]
+            )
+            NEXT_TODAY_CAP = 1
+            available_slots = NEXT_TODAY_CAP - next_count
+            
+            if available_slots <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Next Today is full ({NEXT_TODAY_CAP}). Finish or move something out first."
+                )
+            
+            if len(items_to_promote) > available_slots:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Next Today only has {available_slots} slot(s) available. Can only promote {available_slots} item(s)."
+                )
+        
+        # Create tasks for each item
+        created_tasks = []
+        created_at = datetime.now(timezone.utc)
+        
+        for item in items_to_promote:
+            task_id = str(uuid.uuid4())
+            await conn.execute(
+                """INSERT INTO tasks (id, user_id, title, status, created_at, priority, urgency, importance, duration)
+                   VALUES ($1, $2, $3, $4, $5, 2, 2, 2, 30)""",
+                task_id, user["id"], item.get('text', 'Untitled Task'), task_status, created_at
+            )
+            
+            # Update dump_item: status='promoted', created_task_id=task_id
+            await conn.execute(
+                """UPDATE dump_items 
+                   SET status = 'promoted', created_task_id = $1
+                   WHERE id = $2""",
+                task_id, item['id']
+            )
+            
+            # Fetch created task
+            task_row = await conn.fetchrow(
+                """SELECT id, user_id, title, description, priority, urgency, importance, 
+                          scheduled_date::text, scheduled_time, duration, status, created_at::text
+                   FROM tasks WHERE id = $1""",
+                task_id
+            )
+            created_tasks.append(dict(task_row))
+    
+    return {"tasks": created_tasks}
+
+@api_router.get("/dump-items")
+async def get_dump_items(
+    status: Optional[str] = Query(None, description="Filter by status: 'new', 'promoted', 'dismissed'"),
+    user: dict = Depends(get_current_user)
+):
+    """Get dump_items for the current user, optionally filtered by status"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        if status:
+            rows = await conn.fetch(
+                """SELECT id, dump_id, user_id, text, status, created_task_id, created_at::text
+                   FROM dump_items
+                   WHERE user_id = $1 AND status = $2
+                   ORDER BY created_at DESC""",
+                user["id"], status
+            )
+        else:
+            rows = await conn.fetch(
+                """SELECT id, dump_id, user_id, text, status, created_task_id, created_at::text
+                   FROM dump_items
+                   WHERE user_id = $1
+                   ORDER BY created_at DESC""",
+                user["id"]
+            )
+    
+    return [dict(row) for row in rows]
+
+@api_router.post("/dump-items/{item_id}/dismiss")
+async def dismiss_dump_item(item_id: str, user: dict = Depends(get_current_user)):
+    """Dismiss a dump_item (sets status to 'dismissed')"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user (authorization check)
+        item = await conn.fetchrow(
+            """SELECT id, status FROM dump_items
+               WHERE id = $1 AND user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        # Check if already dismissed or promoted
+        if item.get('status') == 'dismissed':
+            raise HTTPException(status_code=400, detail="Dump item already dismissed")
+        if item.get('status') == 'promoted':
+            raise HTTPException(status_code=400, detail="Cannot dismiss promoted item")
+        
+        # Update status to dismissed
+        await conn.execute(
+            """UPDATE dump_items 
+               SET status = 'dismissed'
+               WHERE id = $1""",
+            item_id
+        )
+        
+        # Fetch updated item
+        updated_row = await conn.fetchrow(
+            """SELECT id, dump_id, user_id, text, status, created_task_id, created_at::text
+               FROM dump_items WHERE id = $1""",
+            item_id
+        )
+    
+    return dict(updated_row)
+
+@api_router.post("/dump-items/dismiss-bulk")
+async def dismiss_dump_items_bulk(
+    request: dict,  # {item_ids: string[]}
+    user: dict = Depends(get_current_user)
+):
+    """Dismiss multiple dump_items"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    item_ids = request.get("item_ids", [])
+    if not item_ids:
+        raise HTTPException(status_code=400, detail="item_ids cannot be empty")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify all items belong to user (authorization check)
+        item_ids_placeholder = ','.join(f'${i+1}' for i in range(len(item_ids)))
+        items = await conn.fetch(
+            f"""SELECT id, status FROM dump_items
+               WHERE id IN ({item_ids_placeholder}) AND user_id = ${len(item_ids) + 1}""",
+            *item_ids, user["id"]
+        )
+        
+        if len(items) != len(item_ids):
+            raise HTTPException(status_code=404, detail="Some dump items not found or you don't have permission")
+        
+        # Filter out already dismissed or promoted items
+        items_to_dismiss = [item for item in items if item.get('status') not in ['dismissed', 'promoted']]
+        
+        if not items_to_dismiss:
+            raise HTTPException(status_code=400, detail="All selected items are already dismissed or promoted")
+        
+        # Update status to dismissed
+        item_ids_to_dismiss = [item['id'] for item in items_to_dismiss]
+        item_ids_placeholder_dismiss = ','.join(f'${i+1}' for i in range(len(item_ids_to_dismiss)))
+        await conn.execute(
+            f"""UPDATE dump_items 
+               SET status = 'dismissed'
+               WHERE id IN ({item_ids_placeholder_dismiss}) AND user_id = ${len(item_ids_to_dismiss) + 1}""",
+            *item_ids_to_dismiss, user["id"]
+        )
+    
+    return {"dismissed_count": len(items_to_dismiss)}
+
+@api_router.patch("/dump-items/{item_id}/snooze")
+async def snooze_dump_item(item_id: str, snooze_request: SnoozeRequest, user: dict = Depends(get_current_user)):
+    """Snooze a dump_item until a specific date"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user's dump
+        item = await conn.fetchrow(
+            """SELECT dump_items.id FROM dump_items
+               JOIN dumps ON dump_items.dump_id = dumps.id
+               WHERE dump_items.id = $1 AND dumps.user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        snooze_until_dt = datetime.fromisoformat(snooze_request.snooze_until.replace('Z', '+00:00'))
+        
+        await conn.execute(
+            """UPDATE dump_items 
+               SET status = 'snoozed', snooze_until = $1
+               WHERE id = $2""",
+            snooze_until_dt, item_id
+        )
+        
+        updated_item = await conn.fetchrow(
+            """SELECT id, dump_id, created_at::text, text, status,
+                      snooze_until::text, linked_task_id
+               FROM dump_items WHERE id = $1""",
+            item_id
+        )
+    
+    return dict(updated_item)
+
+@api_router.patch("/dump-items/{item_id}/save")
+async def save_dump_item(item_id: str, user: dict = Depends(get_current_user)):
+    """Save a dump_item to Logbook"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user's dump
+        item = await conn.fetchrow(
+            """SELECT dump_items.id FROM dump_items
+               JOIN dumps ON dump_items.dump_id = dumps.id
+               WHERE dump_items.id = $1 AND dumps.user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        await conn.execute(
+            "UPDATE dump_items SET status = 'saved' WHERE id = $1",
+            item_id
+        )
+        
+        updated_item = await conn.fetchrow(
+            """SELECT id, dump_id, created_at::text, text, status,
+                      snooze_until::text, linked_task_id
+               FROM dump_items WHERE id = $1""",
+            item_id
+        )
+    
+    return dict(updated_item)
+
+@api_router.patch("/dump-items/{item_id}/trash")
+async def trash_dump_item(item_id: str, user: dict = Depends(get_current_user)):
+    """Trash a dump_item"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user's dump
+        item = await conn.fetchrow(
+            """SELECT dump_items.id FROM dump_items
+               JOIN dumps ON dump_items.dump_id = dumps.id
+               WHERE dump_items.id = $1 AND dumps.user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        await conn.execute(
+            "UPDATE dump_items SET status = 'trashed' WHERE id = $1",
+            item_id
+        )
+        
+        updated_item = await conn.fetchrow(
+            """SELECT id, dump_id, created_at::text, text, status,
+                      snooze_until::text, linked_task_id
+               FROM dump_items WHERE id = $1""",
+            item_id
+        )
+    
+    return dict(updated_item)
+
+@api_router.get("/next-today-count")
+async def get_next_today_count(user: dict = Depends(get_current_user)):
+    """Get count of tasks in Next Today and available slots"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        count = await conn.fetchval(
+            "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'next'",
+            user["id"]
+        )
+    
+    NEXT_TODAY_CAP = 1
+    return {
+        "count": count or 0,
+        "cap": NEXT_TODAY_CAP,
+        "remaining": max(0, NEXT_TODAY_CAP - (count or 0))
+    }
+
+
 # ===== Google Calendar Integration =====
 
 @api_router.get("/auth/google/login")
@@ -1434,8 +2700,476 @@ async def sync_single_task(task_id: str):
     raise HTTPException(status_code=503, detail="Google Calendar sync is currently disabled")
 
 
+# Dump models and endpoints are defined above, starting around line 1749
+# Duplicate removed here - see # ===== Dump (Transmission) System ===== section above
+# (This comment is just to prevent accidental re-addition)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    source: str = Field(..., description="Source type: 'voice' or 'text'")
+    raw_text: str
+    transcript: Optional[str] = None
+    clarified_at: Optional[str] = None
+    archived_at: Optional[str] = None
+
+class DumpCreate(BaseModel):
+    source: str = Field(..., description="Source type: 'voice' or 'text'")
+    raw_text: str
+    transcript: Optional[str] = None
+
+class DumpItem(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    dump_id: str
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    text: str
+    status: str = Field(default="new", description="Status: 'new', 'promoted', 'snoozed', 'saved', 'trashed'")
+    snooze_until: Optional[str] = None
+    linked_task_id: Optional[str] = None
+
+class DumpItemCreate(BaseModel):
+    text: str
+    status: Optional[str] = Field(default="new")
+    snooze_until: Optional[str] = None
+
+class DumpItemUpdate(BaseModel):
+    text: Optional[str] = None
+    status: Optional[str] = None
+    snooze_until: Optional[str] = None
+    linked_task_id: Optional[str] = None
+
+# Dump endpoints
+@api_router.get("/dumps", response_model=List[Dump])
+async def get_dumps(archived: Optional[bool] = Query(None, description="Filter by archived status"), 
+                    user: dict = Depends(get_current_user)):
+    """Get all dumps for the current user, newest first. Returns [] if table doesn't exist (dev mode)."""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        try:
+            # Check if dumps table exists - if not, return empty list (graceful degradation)
+            table_exists = await conn.fetchval(
+                """SELECT EXISTS (
+                   SELECT 1 FROM information_schema.tables 
+                   WHERE table_schema = 'public' 
+                   AND table_name = 'dumps'
+                )"""
+            )
+            
+            if not table_exists:
+                logger.warning(f"dumps table does not exist for user {user['id']}. Returning empty list.")
+                return []
+        except Exception as e:
+            logger.error(f"Error checking for dumps table: {e}")
+            # In dev mode, return empty list instead of crashing
+            if ENV != 'production':
+                return []
+            raise HTTPException(status_code=500, detail="Database error")
+        
+        try:
+            if archived is None:
+                # Get non-archived dumps by default
+                rows = await conn.fetch(
+                    """SELECT id, user_id, created_at::text, source, raw_text, transcript,
+                              clarified_at::text, archived_at::text
+                       FROM dumps 
+                       WHERE user_id = $1 AND archived_at IS NULL
+                       ORDER BY created_at DESC""",
+                    user["id"]
+                )
+            else:
+                rows = await conn.fetch(
+                    """SELECT id, user_id, created_at::text, source, raw_text, transcript,
+                              clarified_at::text, archived_at::text
+                       FROM dumps 
+                       WHERE user_id = $1 AND (archived_at IS NULL) = $2
+                       ORDER BY created_at DESC""",
+                    user["id"], not archived
+                )
+            
+            return [dict(row) for row in rows]
+        except Exception as e:
+            error_str = str(e).lower()
+            if "does not exist" in error_str or "relation" in error_str or "table" in error_str or "column" in error_str:
+                logger.warning(f"Database schema issue with dumps table: {e}. Returning empty list.")
+                # In dev mode, return empty list instead of crashing
+                if ENV != 'production':
+                    return []
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Database schema error: {str(e)}"
+                )
+            logger.error(f"Error fetching dumps: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error fetching dumps: {str(e)}"
+            )
+
+@api_router.get("/dumps/{dump_id}")
+async def get_dump(dump_id: str, user: dict = Depends(get_current_user)):
+    """Get a single dump by ID with its items"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Get dump
+        dump_row = await conn.fetchrow(
+            """SELECT id, user_id, created_at::text, source, raw_text, transcript,
+                      clarified_at::text, archived_at::text
+               FROM dumps
+               WHERE id = $1 AND user_id = $2""",
+            dump_id, user["id"]
+        )
+    
+    if not dump_row:
+        raise HTTPException(status_code=404, detail="Dump not found")
+    
+    # Get items for this dump
+    async with pool.acquire() as conn:
+        item_rows = await conn.fetch(
+            """SELECT id, dump_id, user_id, text, status, created_task_id, created_at::text
+               FROM dump_items
+               WHERE dump_id = $1
+               ORDER BY created_at ASC""",
+            dump_id
+        )
+    
+    dump_dict = dict(dump_row)
+    dump_dict["items"] = [dict(row) for row in item_rows]
+    
+    return dump_dict
+
+@api_router.patch("/dumps/{dump_id}", response_model=Dump)
+async def update_dump(dump_id: str, dump_update: dict, user: dict = Depends(get_current_user)):
+    """Update a dump (e.g., archive, clarify)"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Build update query dynamically
+        allowed_fields = {'transcript', 'clarified_at', 'archived_at'}
+        update_data = {k: v for k, v in dump_update.items() if k in allowed_fields}
+        
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No valid fields to update")
+        
+        set_clauses = []
+        values = []
+        param_num = 1
+        
+        for key, value in update_data.items():
+            if key == 'clarified_at' or key == 'archived_at':
+                if value:
+                    set_clauses.append(f"{key} = ${param_num}")
+                    values.append(datetime.fromisoformat(value.replace('Z', '+00:00')) if isinstance(value, str) else value)
+                else:
+                    set_clauses.append(f"{key} = NULL")
+                param_num += 1 if value else 0
+            else:
+                set_clauses.append(f"{key} = ${param_num}")
+                values.append(value)
+                param_num += 1
+        
+        where_clause = f"id = ${param_num} AND user_id = ${param_num + 1}"
+        values.extend([dump_id, user["id"]])
+        
+        query = f"""UPDATE dumps SET {', '.join(set_clauses)} 
+                    WHERE {where_clause}
+                    RETURNING id, user_id, created_at::text, source, raw_text, transcript,
+                              clarified_at::text, archived_at::text"""
+        
+        row = await conn.fetchrow(query, *values)
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+    
+    return dict(row)
+
+# Dump Items endpoints
+@api_router.post("/dumps/{dump_id}/items", response_model=DumpItem)
+async def create_dump_item(dump_id: str, item_data: DumpItemCreate, user: dict = Depends(get_current_user)):
+    """Create a new item in a dump"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user
+        dump = await conn.fetchrow(
+            "SELECT id FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        item_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+        status = item_data.status or "new"
+        
+        snooze_until_value = None
+        if item_data.snooze_until:
+            snooze_until_value = datetime.fromisoformat(item_data.snooze_until.replace('Z', '+00:00'))
+        
+        await conn.execute(
+            """INSERT INTO dump_items (id, dump_id, created_at, text, status, snooze_until)
+               VALUES ($1, $2, $3, $4, $5, $6)""",
+            item_id, dump_id, created_at, item_data.text, status, snooze_until_value
+        )
+        
+        row = await conn.fetchrow(
+            """SELECT id, dump_id, created_at::text, text, status, 
+                      snooze_until::text, linked_task_id
+               FROM dump_items WHERE id = $1""",
+            item_id
+        )
+    
+    return dict(row)
+
+@api_router.get("/dumps/{dump_id}/items", response_model=List[DumpItem])
+async def get_dump_items(dump_id: str, user: dict = Depends(get_current_user)):
+    """Get all items for a dump"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user
+        dump = await conn.fetchrow(
+            "SELECT id FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        rows = await conn.fetch(
+            """SELECT id, dump_id, created_at::text, text, status,
+                      snooze_until::text, linked_task_id
+               FROM dump_items 
+               WHERE dump_id = $1
+               ORDER BY created_at ASC""",
+            dump_id
+        )
+    
+    return [dict(row) for row in rows]
+
+@api_router.patch("/dump-items/{item_id}", response_model=DumpItem)
+async def update_dump_item(item_id: str, item_update: DumpItemUpdate, user: dict = Depends(get_current_user)):
+    """Update a dump item"""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify item belongs to user's dump
+        item = await conn.fetchrow(
+            """SELECT dump_items.id FROM dump_items
+               JOIN dumps ON dump_items.dump_id = dumps.id
+               WHERE dump_items.id = $1 AND dumps.user_id = $2""",
+            item_id, user["id"]
+        )
+        if not item:
+            raise HTTPException(status_code=404, detail="Dump item not found or you don't have permission")
+        
+        update_data = {k: v for k, v in item_update.model_dump().items() if v is not None}
+        if not update_data:
+            raise HTTPException(status_code=400, detail="No update data provided")
+        
+        set_clauses = []
+        values = []
+        param_num = 1
+        
+        for key, value in update_data.items():
+            if key == 'snooze_until':
+                if value:
+                    set_clauses.append(f"{key} = ${param_num}")
+                    values.append(datetime.fromisoformat(value.replace('Z', '+00:00')))
+                else:
+                    set_clauses.append(f"{key} = NULL")
+                param_num += 1 if value else 0
+            else:
+                set_clauses.append(f"{key} = ${param_num}")
+                values.append(value)
+                param_num += 1
+        
+        where_clause = f"id = ${param_num}"
+        values.append(item_id)
+        
+        query = f"""UPDATE dump_items SET {', '.join(set_clauses)} 
+                    WHERE {where_clause}
+                    RETURNING id, dump_id, created_at::text, text, status,
+                              snooze_until::text, linked_task_id"""
+        
+        row = await conn.fetchrow(query, *values)
+    
+    return dict(row)
+
+@api_router.post("/dumps/{dump_id}/triage")
+async def triage_dump_items(dump_id: str, triage_request: TriageRequest, user: dict = Depends(get_current_user)):
+    """Convert dump_items to tasks. Enforces Next Today cap of 1."""
+    if not user or not user.get("id"):
+        raise HTTPException(status_code=401, detail="User authentication required")
+    
+    if triage_request.target not in ['INBOX', 'NEXT_TODAY', 'LATER']:
+        raise HTTPException(status_code=400, detail="Target must be 'INBOX', 'NEXT_TODAY', or 'LATER'")
+    
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        # Verify dump belongs to user
+        dump = await conn.fetchrow(
+            "SELECT id FROM dumps WHERE id = $1 AND user_id = $2",
+            dump_id, user["id"]
+        )
+        if not dump:
+            raise HTTPException(status_code=404, detail="Dump not found or you don't have permission")
+        
+        # Get dump_items (verify they belong to this dump and user)
+        # Use COALESCE to handle both state and status columns (migration transition)
+        item_ids_placeholder = ','.join(f'${i+1}' for i in range(len(triage_request.item_ids)))
+        items_query = f"""SELECT di.id, di.text, COALESCE(di.state, di.status, 'new') as item_state, di.user_id
+                          FROM dump_items di
+                          WHERE di.id IN ({item_ids_placeholder}) 
+                            AND di.dump_id = $${len(triage_request.item_ids) + 1}
+                            AND di.user_id = $${len(triage_request.item_ids) + 2}"""
+        
+        items = await conn.fetch(
+            items_query,
+            *triage_request.item_ids, dump_id, user["id"]
+        )
+        
+        if len(items) != len(triage_request.item_ids):
+            raise HTTPException(status_code=400, detail="Some dump items not found or don't belong to this dump")
+        
+        # Check Next Today cap if target is NEXT_TODAY
+        if triage_request.target == 'NEXT_TODAY':
+            next_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM tasks WHERE user_id = $1 AND status = 'next'",
+                user["id"]
+            )
+            NEXT_TODAY_CAP = 1
+            available_slots = NEXT_TODAY_CAP - next_count
+            
+            if available_slots <= 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Next Today is full ({NEXT_TODAY_CAP}). Convert remaining to Inbox or Later."
+                )
+            
+            # If trying to add more items than available slots, only convert what fits
+            if len(items) > available_slots:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Next Today is full ({NEXT_TODAY_CAP}). Only {available_slots} slot(s) available. Convert remaining to Inbox or Later."
+                )
+        
+        # Map target to task status
+        task_status = 'inbox' if triage_request.target == 'INBOX' else ('next' if triage_request.target == 'NEXT_TODAY' else 'later')
+        
+        # Create tasks from dump_items
+        created_tasks = []
+        created_at = datetime.now(timezone.utc)
+        
+        for item in items:
+            # Skip if already converted (check item_state which uses COALESCE)
+            if item.get('item_state') == 'converted' or item.get('item_state') == 'promoted':
+                continue
+            
+            task_id = str(uuid.uuid4())
+            await conn.execute(
+                """INSERT INTO tasks (id, user_id, title, status, created_at, priority, urgency, importance, duration)
+                   VALUES ($1, $2, $3, $4, $5, 2, 2, 2, 30)""",
+                task_id, user["id"], item.get('text', 'Untitled Task'), task_status, created_at
+            )
+            
+            # Mark dump_item as converted (try state first, fallback to status for migration transition)
+            try:
+                await conn.execute(
+                    "UPDATE dump_items SET state = 'converted' WHERE id = $1",
+                    item['id']
+                )
+            except Exception:
+                # Fallback: if state column doesn't exist, use status
+                try:
+                    await conn.execute(
+                        "UPDATE dump_items SET status = 'converted' WHERE id = $1",
+                        item['id']
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to update dump_item state/status: {e}")
+            
+            # Fetch created task
+            task = await conn.fetchrow(
+                """SELECT id, user_id, title, description, priority, urgency, importance,
+                      scheduled_date::text, scheduled_time, duration, status, created_at::text
+                   FROM tasks WHERE id = $1""",
+                task_id
+            )
+            if task:
+                created_tasks.append(dict(task))
+    
+    return {"tasks": created_tasks}
+
 # Include the router in the main app
 app.include_router(api_router)
+
+# ============ BACKWARD COMPATIBILITY: Root-level route aliases ============
+# Add root-level aliases for key endpoints (health, dumps) for backward compatibility
+# These delegate to the same handlers as /api routes
+
+@app.get("/health")
+async def health_root():
+    """Root-level health endpoint (alias for /api/health)"""
+    return {"status": "healthy"}
+
+# Root-level dump endpoint aliases (for backward compatibility)
+# These delegate to the handlers defined in api_router
+# Both /dumps and /api/dumps routes work for all dump operations
+
+@app.post("/dumps", response_model=Dump)
+async def create_dump_root(dump_data: DumpCreate, user: dict = Depends(get_current_user)):
+    """Root-level POST /dumps endpoint (alias for /api/dumps)"""
+    # Delegate to the existing create_dump handler (defined above in api_router)
+    return await create_dump(dump_data, user)
+
+@app.get("/dumps", response_model=List[Dump])
+async def get_dumps_root(
+    archived: Optional[bool] = Query(None, description="Filter by archived status"), 
+    user: dict = Depends(get_current_user)
+):
+    """Root-level GET /dumps endpoint (alias for /api/dumps) - returns [] if not authenticated or table missing"""
+    # Delegate to the existing get_dumps handler (defined above in api_router)
+    # This will handle authentication and graceful degradation for missing tables
+    try:
+        return await get_dumps(archived, user)
+    except HTTPException as e:
+        # Re-raise HTTP exceptions (401, 500, etc.) as-is
+        raise
+    except Exception as e:
+        # Catch any other unexpected errors and return empty list in dev mode
+        logger.error(f"Unexpected error in get_dumps_root: {e}", exc_info=True)
+        if ENV != 'production':
+            return []
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+@app.get("/dumps/{dump_id}", response_model=Dump)
+async def get_dump_root(dump_id: str, user: dict = Depends(get_current_user)):
+    """Root-level GET /dumps/{dump_id} endpoint (alias for /api/dumps/{dump_id})"""
+    # Delegate to the existing get_dump handler (defined above in api_router)
+    return await get_dump(dump_id, user)
+
+@app.post("/dumps/{dump_id}/extract")
+async def extract_dump_root(dump_id: str, user: dict = Depends(get_current_user)):
+    """Root-level POST /dumps/{dump_id}/extract endpoint (alias for /api/dumps/{dump_id}/extract)"""
+    # Delegate to the extract_dump handler (which itself delegates to clarify_dump)
+    return await extract_dump(dump_id, user)
+
+@app.post("/dumps/{dump_id}/triage")
+async def triage_dump_root(dump_id: str, triage_request: TriageRequest, user: dict = Depends(get_current_user)):
+    """Root-level POST /dumps/{dump_id}/triage endpoint (alias for /api/dumps/{dump_id}/triage)"""
+    # Delegate to the existing triage_dump_items handler
+    return await triage_dump_items(dump_id, triage_request, user)
 
 # Google Calendar callback route - DISABLED
 @app.get("/gcal")
@@ -1443,28 +3177,7 @@ async def google_callback_root(code: str = Query(None)):
     """Handle Google OAuth callback - DISABLED"""
     return RedirectResponse(f"{FRONTEND_URL}?google_error=Google Calendar sync is currently disabled")
 
-# CORS configuration
-# Note: When allow_credentials=True, you cannot use allow_origins=['*']
-# Must specify exact origins. Default includes common development URLs.
-default_origins = 'http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000'
-cors_origins_str = os.environ.get('CORS_ORIGINS', default_origins)
-
-if cors_origins_str == '*':
-    # If '*' is specified, disable credentials (security requirement)
-    cors_origins = ['*']
-    allow_creds = False
-else:
-    # Parse comma-separated origins
-    cors_origins = [origin.strip() for origin in cors_origins_str.split(',') if origin.strip()]
-    allow_creds = True
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=allow_creds,
-    allow_origins=cors_origins,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware already added above (before routes)
 
 # Root redirect to API docs in development
 @app.get("/")

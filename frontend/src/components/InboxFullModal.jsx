@@ -22,18 +22,15 @@ export default function InboxFullModal({
   taskToAdd,
   existingInboxTasks,
   onSetAsNext,
-  onSendToLater,
   onReplaceTask,
   onCancel,
 }) {
   const [selectedReplaceTaskId, setSelectedReplaceTaskId] = useState(null);
-  const [action, setAction] = useState(null); // 'next' | 'later' | 'replace' | null
+  const [action, setAction] = useState(null); // 'next' | 'replace' | null
 
   const handleApply = () => {
     if (action === 'next' && onSetAsNext) {
       onSetAsNext();
-    } else if (action === 'later' && onSendToLater) {
-      onSendToLater();
     } else if (action === 'replace' && selectedReplaceTaskId && onReplaceTask) {
       onReplaceTask(selectedReplaceTaskId);
     } else {
@@ -56,7 +53,7 @@ export default function InboxFullModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
-          <DialogTitle>Inbox is full (7)</DialogTitle>
+          <DialogTitle>Inbox is full (5)</DialogTitle>
           <DialogDescription>
             Choose what to do with this task: "{taskToAdd?.title || 'Untitled'}"
           </DialogDescription>
@@ -76,18 +73,6 @@ export default function InboxFullModal({
             </div>
           </Button>
 
-          {/* Send to Later */}
-          <Button
-            variant={action === 'later' ? 'default' : 'outline'}
-            className="w-full justify-start gap-2 h-auto py-3"
-            onClick={() => setAction('later')}
-          >
-            <Clock className="w-4 h-4" />
-            <div className="flex flex-col items-start">
-              <span className="font-medium">Send to Later</span>
-              <span className="text-xs text-muted-foreground">Will expire in 14 days</span>
-            </div>
-          </Button>
 
           {/* Replace an existing task */}
           <div className="space-y-2">

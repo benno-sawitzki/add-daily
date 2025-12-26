@@ -6,6 +6,14 @@ import { ChevronLeft, ChevronRight, CheckCircle2, Trash2, Download } from "lucid
 import { format, startOfWeek, addDays, isToday, addWeeks, subWeeks } from "date-fns";
 import TaskEditDialog from "./TaskEditDialog";
 import { getCalendarViewMode, setCalendarViewMode, generateTimeSlots, STORAGE_EVENT } from "@/utils/calendarSettings";
+import { useCalendarDnD } from "@/hooks/useCalendarDnD";
+import { 
+  SLOT_HEIGHT, 
+  formatTimeShort, 
+  getEndTime,
+  getTaskHeight,
+  buildUpdatePayload 
+} from "@/utils/calendarDnD";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
@@ -24,31 +32,81 @@ const PRIORITY_COLORS = {
   1: "bg-slate-500 text-white",
 };
 
-const SLOT_HEIGHT = 32; // Height of each 30-min slot in pixels
-
 export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
   const [currentDate, setCurrentDate] = useState(new Date());
   const [editingTask, setEditingTask] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
-  const [resizing, setResizing] = useState(null);
-  const [draggingTask, setDraggingTask] = useState(null);
-  const [dragPosition, setDragPosition] = useState(null); // Snapped position for drop
-  const [cursorPosition, setCursorPosition] = useState(null); // Smooth cursor follow
   const [viewMode, setViewMode] = useState(() => getCalendarViewMode()); // 'day' or '24h'
   const calendarRef = useRef(null);
-  const dragTaskRef = useRef(null);
-  const resizeStartY = useRef(null);
-  const resizeStartDuration = useRef(null);
+  const dayColumnsGridRef = useRef(null); // Ref for the day columns grid container
+  const dayColumnRefs = useRef({}); // Refs for individual day columns
+  const [todayColumnMetrics, setTodayColumnMetrics] = useState({ left: 0, width: 0 }); // Today column position and width
+
+  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   // Generate time slots based on view mode
   const TIME_SLOTS = generateTimeSlots(viewMode);
 
-  // Update current time every minute
+  // Use shared DnD hook
+  const {
+    draggingTask,
+    dragPosition,
+    cursorPosition,
+    resizing,
+    handleDragStart,
+    handleDragEnd,
+    handleCalendarDragOver: handleDragOverShared,
+    handleCalendarDrop: handleDropShared,
+    handleResizeStart,
+  } = useCalendarDnD({
+    view: 'weekly',
+    onUpdateTask,
+    timeSlots: TIME_SLOTS,
+    viewMode,
+    weekDays,
+  });
+
+  // Wrapper for handleCalendarDragOver that passes calendarRef
+  const handleCalendarDragOver = (e) => {
+    handleDragOverShared(e, calendarRef);
+  };
+
+  // Wrapper for handleCalendarDrop that uses buildUpdatePayload
+  const handleCalendarDrop = (e) => {
+    e.preventDefault();
+    const taskId = e.dataTransfer.getData("taskId");
+    
+    if (taskId && dragPosition && dragPosition.date && dragPosition.time) {
+      const payload = buildUpdatePayload(dragPosition.date, dragPosition.time);
+      onUpdateTask(taskId, payload);
+    }
+    
+    handleDragEnd();
+  };
+
+  // Update current time every 30 seconds (or on minute boundary)
   useEffect(() => {
-    const timer = setInterval(() => {
+    const updateTime = () => {
       setCurrentTime(new Date());
-    }, 60000);
-    return () => clearInterval(timer);
+    };
+    
+    // Update immediately
+    updateTime();
+    
+    // Calculate delay to next 30-second boundary
+    const now = new Date();
+    const seconds = now.getSeconds();
+    const delay = seconds < 30 ? (30 - seconds) * 1000 : (60 - seconds) * 1000;
+    
+    const timeout = setTimeout(() => {
+      updateTime();
+      // Then update every 30 seconds
+      const interval = setInterval(updateTime, 30000);
+      return () => clearInterval(interval);
+    }, delay);
+    
+    return () => clearTimeout(timeout);
   }, []);
 
   // Listen for view mode changes from other components (e.g., DailyCalendar)
@@ -70,6 +128,54 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     setViewMode(newMode);
     setCalendarViewMode(newMode);
   };
+
+  // Measure today column position and width
+  useEffect(() => {
+    const measureTodayColumn = () => {
+      if (!dayColumnsGridRef.current) return;
+      
+      const todayIndex = weekDays.findIndex(d => isToday(d));
+      if (todayIndex === -1) {
+        setTodayColumnMetrics({ left: 0, width: 0 });
+        return;
+      }
+      
+      const gridRect = dayColumnsGridRef.current.getBoundingClientRect();
+      const todayDateStr = format(weekDays[todayIndex], "yyyy-MM-dd");
+      const todayColRef = dayColumnRefs.current[todayDateStr];
+      
+      if (todayColRef) {
+        const todayRect = todayColRef.getBoundingClientRect();
+        const todayLeft = todayRect.left - gridRect.left;
+        const todayWidth = todayRect.width;
+        setTodayColumnMetrics({ left: todayLeft, width: todayWidth });
+      } else {
+        // If ref not ready yet, try again after a short delay
+        setTimeout(measureTodayColumn, 50);
+      }
+    };
+    
+    // Measure after a short delay to ensure DOM is ready
+    const timeout = setTimeout(measureTodayColumn, 100);
+    
+    // Measure on window resize
+    window.addEventListener('resize', measureTodayColumn);
+    
+    // Use ResizeObserver for more accurate measurements
+    let resizeObserver;
+    if (dayColumnsGridRef.current) {
+      resizeObserver = new ResizeObserver(measureTodayColumn);
+      resizeObserver.observe(dayColumnsGridRef.current);
+    }
+    
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener('resize', measureTodayColumn);
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+    };
+  }, [weekDays, currentDate]);
 
   // Auto-scroll to current time on mount (with 1 hour buffer)
   useEffect(() => {
@@ -104,9 +210,6 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
       }
     }
   }, [viewMode]); // Re-run when view mode changes
-
-  const weekStart = startOfWeek(currentDate, { weekStartsOn: 1 });
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
 
   const scheduledTasks = tasks.filter((t) => t.status === "scheduled" && t.scheduled_date);
 
@@ -169,81 +272,6 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     return { index, total };
   };
 
-  const handleDragStart = (e, task) => {
-    if (resizing) return;
-    dragTaskRef.current = task;
-    setDraggingTask(task);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("taskId", task.id);
-    
-    // Make the default drag image invisible
-    const img = new Image();
-    img.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-    e.dataTransfer.setDragImage(img, 0, 0);
-  };
-
-  const handleDragEnd = () => {
-    dragTaskRef.current = null;
-    setDraggingTask(null);
-    setDragPosition(null);
-    setCursorPosition(null);
-  };
-
-  const handleCalendarDragOver = (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    
-    if (!calendarRef.current || !draggingTask) return;
-    
-    const rect = calendarRef.current.getBoundingClientRect();
-    const scrollTop = calendarRef.current.scrollTop;
-    
-    // Calculate smooth position relative to calendar (follows cursor)
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + scrollTop;
-    
-    // Calculate which day column (skip the time label column which is 70px)
-    const columnWidth = (rect.width - 70) / 7;
-    const dayIndex = Math.max(0, Math.min(6, Math.floor((x - 70) / columnWidth)));
-    
-    // Store smooth cursor position (for fluid ghost movement)
-    setCursorPosition({
-      x: Math.max(70, x),
-      y: Math.max(0, y),
-      dayIndex,
-      columnWidth
-    });
-    
-    // Calculate snapped slot position (for drop target indicator)
-    const slotIndex = Math.max(0, Math.min(TIME_SLOTS.length - 1, Math.floor(y / SLOT_HEIGHT)));
-    
-    if (dayIndex >= 0 && dayIndex < 7) {
-      setDragPosition({
-        dayIndex,
-        slotIndex,
-        time: TIME_SLOTS[slotIndex],
-        date: format(weekDays[dayIndex], "yyyy-MM-dd")
-      });
-    }
-  };
-
-  const handleCalendarDrop = (e) => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData("taskId");
-    
-    if (taskId && dragPosition) {
-      onUpdateTask(taskId, {
-        scheduled_date: dragPosition.date,
-        scheduled_time: dragPosition.time,
-        status: "scheduled",
-      });
-    }
-    
-    dragTaskRef.current = null;
-    setDraggingTask(null);
-    setDragPosition(null);
-    setCursorPosition(null);
-  };
 
   const handleComplete = (e, taskId) => {
     e.stopPropagation();
@@ -264,65 +292,24 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     setEditingTask(task);
   };
 
-  // Resize handlers
-  const handleResizeStart = (e, task) => {
-    e.stopPropagation();
-    e.preventDefault();
-    setResizing(task.id);
-    resizeStartY.current = e.clientY;
-    resizeStartDuration.current = task.duration || 30;
+  // Format time for display uses shared utility (imported)
 
-    const handleMouseMove = (moveEvent) => {
-      const deltaY = moveEvent.clientY - resizeStartY.current;
-      const deltaSlots = Math.round(deltaY / SLOT_HEIGHT);
-      const newDuration = Math.max(30, resizeStartDuration.current + deltaSlots * 30);
-      
-      // Update task duration visually (will be saved on mouse up)
-      const taskEl = document.querySelector(`[data-task-id="${task.id}"]`);
-      if (taskEl) {
-        const slots = newDuration / 30;
-        taskEl.style.height = `${slots * SLOT_HEIGHT - 4}px`;
-      }
-    };
-
-    const handleMouseUp = (upEvent) => {
-      const deltaY = upEvent.clientY - resizeStartY.current;
-      const deltaSlots = Math.round(deltaY / SLOT_HEIGHT);
-      const newDuration = Math.max(30, resizeStartDuration.current + deltaSlots * 30);
-      
-      if (newDuration !== resizeStartDuration.current) {
-        onUpdateTask(task.id, { duration: newDuration });
-      }
-      
-      // Delay clearing resizing state to prevent click from firing
-      setTimeout(() => setResizing(null), 100);
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  };
-
-  // Format time for display (e.g., "9:00" or "13:30")
-  const formatTimeShort = (timeStr) => {
-    if (!timeStr) return "";
-    const [hours, mins] = timeStr.split(":").map(Number);
-    return `${hours}:${mins.toString().padStart(2, "0")}`;
-  };
-
-  // Calculate end time from start time and duration
-  const getEndTime = (startTime, duration) => {
-    if (!startTime) return "";
-    const [hours, mins] = startTime.split(":").map(Number);
-    let endMins = mins + (duration || 30);
-    let endHours = hours;
-    while (endMins >= 60) {
-      endMins -= 60;
-      endHours += 1;
+  // Format current time for the now indicator label
+  const formatCurrentTime = () => {
+    const hours = currentTime.getHours();
+    const minutes = currentTime.getMinutes();
+    
+    if (viewMode === '24h') {
+      // 24h format: "HH:mm"
+      return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}`;
+    } else {
+      // 12h format: "h:mm"
+      const hour12 = hours % 12 || 12;
+      return `${hour12}:${minutes.toString().padStart(2, "0")}`;
     }
-    return `${endHours}:${endMins.toString().padStart(2, "0")}`;
   };
+
+  // getEndTime uses shared utility (imported)
 
   const handleExportICal = async () => {
     try {
@@ -452,7 +439,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                 left: `calc(70px + ${cursorPosition.dayIndex} * ((100% - 70px) / 7) + 4px)`,
                 top: `${cursorPosition.y - 20}px`,
                 width: `calc((100% - 70px) / 7 - 8px)`,
-                height: `${((draggingTask.duration || 30) / 30) * SLOT_HEIGHT - 4}px`,
+                height: `${getTaskHeight(draggingTask.duration || 30)}px`,
                 opacity: 0.85,
               }}
             >
@@ -465,7 +452,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             </div>
           )}
 
-          {/* Current time indicator - spans full width, thicker/brighter at current day */}
+          {/* Now Indicator Layer - Apple Calendar style */}
           {weekDays.some(d => isToday(d)) && (() => {
             const hours = currentTime.getHours();
             const minutes = currentTime.getMinutes();
@@ -483,54 +470,106 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
             }
             
             const minuteOffset = (minutes % 30) / 30 * SLOT_HEIGHT;
-            const topPosition = slotIndex * SLOT_HEIGHT + minuteOffset;
-            const todayIndex = weekDays.findIndex(d => isToday(d));
-            const dayWidth = `calc((100% - 70px) / 7)`;
+            const nowY = slotIndex * SLOT_HEIGHT + minuteOffset;
+            // Round to avoid subpixel drift, add 0.5 for crisp 1px lines
+            const nowYRounded = Math.round(nowY) + 0.5;
+            const hasToday = todayColumnMetrics.width > 0;
             
             return (
               <div
-                className="absolute z-20 pointer-events-none"
-                style={{ 
-                  top: `${topPosition}px`,
-                  left: '70px',
-                  right: '0'
-                }}
+                className="absolute inset-0 z-20 pointer-events-none"
+                style={{ top: 0, left: 0, right: 0, bottom: 0 }}
               >
-                {/* Full-width line - spans all 7 days */}
-                <div className="flex items-center w-full">
-                  {/* Days before today - thin, dim line */}
-                  {Array.from({ length: todayIndex }).map((_, i) => (
-                    <div
-                      key={`before-${i}`}
-                      className="h-0.5 bg-cyan-400/30"
-                      style={{ width: dayWidth }}
-                    />
-                  ))}
-                  
-                  {/* Today - thick, bright line with circle - full width of column */}
-                  <div 
-                    className="relative flex items-center"
-                    style={{ width: dayWidth }}
+                {/* Day columns container - for positioning the lines */}
+                <div
+                  ref={dayColumnsGridRef}
+                  className="absolute"
+                  style={{
+                    left: '70px',
+                    right: '0',
+                    top: 0,
+                    bottom: 0,
+                  }}
+                >
+                  {/* Single shared Y anchor layer - applies translateY(-50%) once */}
+                  <div
+                    className="absolute left-0 right-0 pointer-events-none"
+                    style={{
+                      top: `${nowYRounded}px`,
+                      transform: 'translateY(-50%)',
+                    }}
                   >
-                    {/* Full-width line spanning the entire day column */}
-                    <div 
-                      className="h-1.5 bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.6)] absolute w-full"
-                    ></div>
-                    {/* Circle centered on the line */}
-                    <div 
-                      className="w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.8)] z-10 absolute" 
-                      style={{ left: '50%', transform: 'translateX(-50%)' }}
-                    ></div>
-                  </div>
-                  
-                  {/* Days after today - thin, dim line */}
-                  {Array.from({ length: 6 - todayIndex }).map((_, i) => (
+                    {/* Thin line - spans all day columns, positioned at top: 0 (centered via parent) */}
                     <div
-                      key={`after-${i}`}
-                      className="h-0.5 bg-cyan-400/30"
-                      style={{ width: dayWidth }}
+                      className="absolute h-0.5 bg-cyan-400/30"
+                      style={{
+                        left: 0,
+                        right: 0,
+                        top: 0,
+                      }}
                     />
-                  ))}
+                    
+                    {/* Thick today line wrapper - only in today column, positioned at top: 0 (same as thin line) */}
+                    {hasToday && (
+                      <div
+                        className="absolute pointer-events-none"
+                        style={{
+                          left: `${todayColumnMetrics.left}px`,
+                          width: `${todayColumnMetrics.width}px`,
+                          top: 0,
+                        }}
+                      >
+                        {/* Glow layer - soft aura behind core line */}
+                        <div
+                          className="absolute bg-cyan-400 rounded-full"
+                          style={{
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            height: '10px',
+                            transform: 'translateY(-50%)',
+                            filter: 'blur(8px)',
+                            opacity: 0.35,
+                          }}
+                        />
+                        {/* Core line - thin stroke, same Y as thin line */}
+                        <div
+                          className="absolute bg-cyan-400 rounded-full"
+                          style={{
+                            left: 0,
+                            right: 0,
+                            top: 0,
+                            height: '2px',
+                            transform: 'translateY(-50%)',
+                            opacity: 1,
+                          }}
+                        >
+                          {/* Dot at left edge of today column - centered on core line */}
+                          <div
+                            className="absolute w-3 h-3 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.7)]"
+                            style={{
+                              left: 0,
+                              top: 0,
+                              transform: 'translate(-50%, -50%)',
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Time label in left gutter - uses same rounded Y value */}
+                <div
+                  className="absolute bg-cyan-400 text-white text-xs font-medium px-2 py-0.5 rounded-full shadow-lg"
+                  style={{
+                    left: '8px',
+                    top: `${nowYRounded}px`,
+                    transform: 'translateY(-50%)',
+                    zIndex: 21,
+                  }}
+                >
+                  {formatCurrentTime()}
                 </div>
               </div>
             );
@@ -563,6 +602,12 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                   return (
                     <div
                       key={`${dateStr}|${time}`}
+                      ref={(el) => {
+                        // Store ref for the first slot of each day (we only need one per day column)
+                        if (el && slotIndex === 0) {
+                          dayColumnRefs.current[dateStr] = el;
+                        }
+                      }}
                       className={`relative border-b border-r border-border/10 p-0.5
                         ${isToday(day) ? "bg-primary/5" : ""}
                       `}
@@ -574,8 +619,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                         const clampedPriority = Math.max(1, Math.min(4, priority));
                         const priorityStyle = PRIORITY_STYLES[clampedPriority] || PRIORITY_STYLES[2];
                         const duration = task.duration || 30;
-                        const slots = duration / 30;
-                        const taskHeight = slots * SLOT_HEIGHT - 4;
+                        const taskHeight = getTaskHeight(duration);
                         const { index, total } = getTaskPosition(task, dateStr);
                         const width = `calc((100% - 4px) / ${total})`;
                         const left = `calc(2px + (100% - 4px) * ${index} / ${total})`;

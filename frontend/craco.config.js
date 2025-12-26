@@ -61,6 +61,22 @@ const webpackConfig = {
         ],
       };
 
+      // Ensure TypeScript extensions are resolved (before .jsx and .js)
+      if (!webpackConfig.resolve) {
+        webpackConfig.resolve = {};
+      }
+      if (!webpackConfig.resolve.extensions) {
+        webpackConfig.resolve.extensions = [];
+      }
+      const extensions = webpackConfig.resolve.extensions;
+      // Add .tsx and .ts at the beginning if not already present
+      if (!extensions.includes('.tsx')) {
+        extensions.unshift('.tsx');
+      }
+      if (!extensions.includes('.ts')) {
+        extensions.unshift('.ts');
+      }
+
       // Add health check plugin to webpack if enabled
       if (config.enableHealthCheck && healthPluginInstance) {
         webpackConfig.plugins.push(healthPluginInstance);

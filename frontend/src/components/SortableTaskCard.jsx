@@ -20,7 +20,7 @@ import {
   GripVertical,
   Sparkles,
 } from "lucide-react";
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 
 const PRIORITY_CONFIG = {
   4: { label: "Critical", color: "text-rose-400", bg: "bg-rose-500/10", border: "border-l-rose-500", icon: AlertCircle },
@@ -34,6 +34,13 @@ const ENERGY_CONFIG = {
   medium: { label: "M", color: "bg-blue-500/20 text-blue-300", fullLabel: "Medium" },
   high: { label: "H", color: "bg-purple-500/20 text-purple-300", fullLabel: "High" },
 };
+
+// Activation delay constants - must match activationConstraint in dndConfig.js
+// Note: This delay (300ms) matches the PointerSensor activationConstraint delay.
+// The progress ring fills over this duration, and the pulse happens at ~150ms (halfway).
+const ACTIVATION_DELAY_MS = 300;
+const PULSE_DELAY_MS = 150;
+const MOVEMENT_TOLERANCE_PX = 5;
 
 export default function SortableTaskCard({ 
   task, 
@@ -50,6 +57,7 @@ export default function SortableTaskCard({
   onClick,
   isDragging = false,
   enableHTML5Drag = false, // Enable HTML5 drag for cross-component dragging (e.g., inbox to calendar)
+  activeId = null, // ID of currently dragging task (from parent DndContext)
 }) {
   const {
     attributes,
@@ -59,14 +67,133 @@ export default function SortableTaskCard({
     transform,
     transition,
     isDragging: isSortableDragging,
-  } = useSortable({ id: task.id });
+  } = useSortable({ id: String(task.id) });
 
   const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
+  
+  // Hold feedback state
+  const [isHolding, setIsHolding] = useState(false);
+  const [holdProgress, setHoldProgress] = useState(0);
+  const [showPulse, setShowPulse] = useState(false);
+  
+  // Refs for tracking hold
+  const holdStartTimeRef = useRef(null);
+  const holdAnimationFrameRef = useRef(null);
+  const pointerStartPosRef = useRef({ x: 0, y: 0 });
+  const handleRef = useRef(null);
+  
+  const isActivated = activeId === String(task.id) && isSortableDragging;
+  
+  // Reset hold feedback when drag activates
+  useEffect(() => {
+    if (isActivated) {
+      cancelHoldFeedback();
+    }
+  }, [isActivated]);
+  
+  // Cancel hold feedback helper
+  const cancelHoldFeedback = () => {
+    setIsHolding(false);
+    setHoldProgress(0);
+    setShowPulse(false);
+    if (holdAnimationFrameRef.current) {
+      cancelAnimationFrame(holdAnimationFrameRef.current);
+      holdAnimationFrameRef.current = null;
+    }
+    holdStartTimeRef.current = null;
+    pointerStartPosRef.current = { x: 0, y: 0 };
+  };
+  
+  // Update hold progress via requestAnimationFrame
+  const updateHoldProgress = () => {
+    if (!holdStartTimeRef.current || isActivated) {
+      cancelHoldFeedback();
+      return;
+    }
+    
+    const elapsed = Date.now() - holdStartTimeRef.current;
+    const progress = Math.min(elapsed / ACTIVATION_DELAY_MS, 1);
+    
+    setHoldProgress(progress);
+    
+    // Show pulse at ~150ms (halfway point)
+    if (elapsed >= PULSE_DELAY_MS) {
+      setShowPulse(true);
+    }
+    
+    // Continue animation if still holding and not activated
+    if (progress < 1 && !isActivated && holdStartTimeRef.current) {
+      holdAnimationFrameRef.current = requestAnimationFrame(updateHoldProgress);
+    } else if (progress >= 1) {
+      // Progress complete - drag should activate now
+      cancelHoldFeedback();
+    }
+  };
+  
+  // Handle pointer down on drag handle for feedback (using Capture phase to avoid overriding dnd-kit)
+  // CRITICAL: We use onPointerDownCapture so we observe the event WITHOUT overriding dnd-kit's listeners.
+  // dnd-kit's listeners (from {...listeners}) must run normally for drag activation to work.
+  // We only observe for visual feedback; we never preventDefault() or stopPropagation().
+  const handlePointerDownCapture = (e) => {
+    // Only start hold feedback if not already dragging
+    if (isActivated || isSortableDragging) return;
+    
+    holdStartTimeRef.current = Date.now();
+    pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
+    setIsHolding(true);
+    setHoldProgress(0);
+    setShowPulse(false);
+    
+    // Start progress animation
+    holdAnimationFrameRef.current = requestAnimationFrame(updateHoldProgress);
+    
+    // Add global listeners for cancel scenarios (use named functions so we can remove them)
+    const handlePointerMove = (moveEvent) => {
+      if (!holdStartTimeRef.current) return;
+      
+      const dx = Math.abs(moveEvent.clientX - pointerStartPosRef.current.x);
+      const dy = Math.abs(moveEvent.clientY - pointerStartPosRef.current.y);
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      // Cancel if moved beyond tolerance
+      if (distance > MOVEMENT_TOLERANCE_PX) {
+        cancelHoldFeedback();
+        document.removeEventListener('pointermove', handlePointerMove);
+        document.removeEventListener('pointerup', handlePointerUp);
+        document.removeEventListener('pointercancel', handlePointerCancel);
+      }
+    };
+    
+    const handlePointerUp = () => {
+      cancelHoldFeedback();
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
+      document.removeEventListener('pointercancel', handlePointerCancel);
+    };
+    
+    const handlePointerCancel = () => {
+      cancelHoldFeedback();
+      document.removeEventListener('pointermove', handlePointerMove);
+      document.removeEventListener('pointerup', handlePointerUp);
+      document.removeEventListener('pointercancel', handlePointerCancel);
+    };
+    
+    document.addEventListener('pointermove', handlePointerMove);
+    document.addEventListener('pointerup', handlePointerUp);
+    document.addEventListener('pointercancel', handlePointerCancel);
+  };
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cancelHoldFeedback();
+    };
+  }, []);
 
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isSortableDragging ? 0.5 : 1,
+    opacity: isSortableDragging ? 0.4 : 1,
   };
 
   const priorityConfig = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG[2];
@@ -77,6 +204,9 @@ export default function SortableTaskCard({
     if (enableHTML5Drag) {
       // Prevent dnd-kit from handling this drag
       e.stopPropagation();
+      if (e.stopImmediatePropagation) {
+        e.stopImmediatePropagation();
+      }
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("taskId", task.id);
       // Create a custom drag image from the card element
@@ -173,21 +303,14 @@ export default function SortableTaskCard({
     }
   };
 
-  // Determine props based on drag mode
-  // Always use dnd-kit for reordering, HTML5 drag handle is separate for calendar dragging
-  const cardProps = {
-    ref: setNodeRef,
-    ...attributes,
-    ...listeners,
-  };
-
   return (
-    <div ref={setNodeRef} style={style} className="mb-3">
+    <div style={style} className="mb-3">
       <Card
-        {...cardProps}
-        className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all cursor-grab active:cursor-grabbing ${
+        ref={setNodeRef}
+        {...attributes}
+        className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all ${
           isSortableDragging ? "border-dashed border-primary/50 bg-primary/5" : ""
-        }`}
+        } ${showPulse && !isActivated ? "hold-pulse" : ""}`}
         data-testid={`task-card-${task.id}`}
         onClick={onClick}
       >
@@ -208,23 +331,85 @@ export default function SortableTaskCard({
                 </Button>
               )}
             </div>
-            {/* Drag handle - HTML5 drag for calendar if enabled, otherwise visual only */}
-            {enableHTML5Drag ? (
-              <div
-                draggable
-                onDragStart={handleHTML5DragStart}
-                onDragEnd={handleHTML5DragEnd}
-                className="text-muted-foreground hover:text-foreground pt-1 cursor-move"
-                title="Drag to calendar"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <GripVertical className="w-5 h-5" />
-              </div>
-            ) : (
-              <div className="text-muted-foreground hover:text-foreground pt-1 pointer-events-none">
-                <GripVertical className="w-5 h-5" />
-              </div>
-            )}
+            {/* Drag handle - attach dnd-kit listeners here for handle-based dragging */}
+            {/* CRITICAL: We use onPointerDownCapture (not onPointerDown) to observe events without overriding dnd-kit's listeners.
+                dnd-kit's {...listeners} must run normally for drag activation. Our feedback is purely visual. */}
+            <div className="relative inline-flex items-center justify-center">
+              {/* Progress ring SVG - pointer-events-none ensures it never blocks interaction */}
+              {isHolding && !isActivated && (
+                <svg
+                  className="absolute inset-0 w-8 h-8 pointer-events-none"
+                  viewBox="0 0 32 32"
+                  style={{ transform: 'translate(-6px, -6px)' }}
+                >
+                  <circle
+                    cx="16"
+                    cy="16"
+                    r="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="text-primary/20"
+                  />
+                  <circle
+                    cx="16"
+                    cy="16"
+                    r="14"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeDasharray={`${2 * Math.PI * 14}`}
+                    strokeDashoffset={`${2 * Math.PI * 14 * (1 - holdProgress)}`}
+                    strokeLinecap="round"
+                    className="text-primary transition-none"
+                    style={{
+                      transform: 'rotate(-90deg)',
+                      transformOrigin: '16px 16px',
+                    }}
+                  />
+                </svg>
+              )}
+              {enableHTML5Drag ? (
+                <div
+                  ref={(node) => {
+                    handleRef.current = node;
+                    setActivatorNodeRef(node);
+                  }}
+                  {...listeners}
+                  draggable
+                  onDragStart={handleHTML5DragStart}
+                  onDragEnd={handleHTML5DragEnd}
+                  onPointerDownCapture={handlePointerDownCapture}
+                  onMouseDown={(e) => {
+                    // Prevent dnd-kit from handling drags that start on the HTML5 drag handle
+                    e.stopPropagation();
+                  }}
+                  className={`text-muted-foreground hover:text-foreground pt-1 ${
+                    isActivated ? 'cursor-grabbing' : 'cursor-grab'
+                  }`}
+                  title="Drag to reorder or drag to calendar"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <GripVertical className="w-5 h-5" />
+                </div>
+              ) : (
+                <div
+                  ref={(node) => {
+                    handleRef.current = node;
+                    setActivatorNodeRef(node);
+                  }}
+                  {...listeners}
+                  onPointerDownCapture={handlePointerDownCapture}
+                  className={`text-muted-foreground hover:text-foreground pt-1 ${
+                    isActivated ? 'cursor-grabbing' : 'cursor-grab'
+                  }`}
+                  title="Drag to reorder"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <GripVertical className="w-5 h-5" />
+                </div>
+              )}
+            </div>
             {/* Move Down Arrow - always reserve space */}
             <div className={index < totalTasks - 1 && onMoveDown ? "" : "h-8 w-8"}>
               {index < totalTasks - 1 && onMoveDown && (

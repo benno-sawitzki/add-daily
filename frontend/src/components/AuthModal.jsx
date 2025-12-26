@@ -62,13 +62,20 @@ const AuthModal = ({ open, mode, onClose, onSwitchMode }) => {
       console.error('Auth error:', err);
       // Show more helpful error messages
       let errorMessage = 'Authentication failed. Please try again.';
-      if (err.message) {
+      
+      // Check for HTTP response first (not a network error)
+      if (err.response) {
+        const status = err.response.status;
+        const detail = err.response.data?.detail || err.response.data?.message;
+        errorMessage = detail || `Request failed (HTTP ${status})`;
+      } else if (err.message) {
+        // Use the error message (might be from AuthContext which already formatted it)
         errorMessage = err.message;
-      } else if (err.response?.data?.detail) {
-        errorMessage = err.response.data.detail;
-      } else if (err.code === 'ERR_NETWORK' || err.message?.includes('Network Error')) {
+      } else if (err.code === 'ERR_NETWORK' || err.code === 'ECONNREFUSED' || err.message === 'Network Error') {
+        // True network error (no response)
         errorMessage = 'Cannot connect to backend server. Please check your connection and backend URL configuration.';
       }
+      
       setError(errorMessage);
     } finally {
       setLoading(false);

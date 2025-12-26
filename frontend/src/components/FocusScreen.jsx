@@ -158,7 +158,33 @@ export default function FocusScreen({
   };
 
   // Handle complete
-  const handleCompleteHyperfocus = () => {
+  const handleCompleteHyperfocus = async () => {
+    // Save focus session to database before clearing (only for focus mode, not starter)
+    if (hyperfocusSession && hyperfocusSession.status === 'running' && hyperfocusSession.mode === 'focus') {
+      try {
+        const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+        const now = Date.now();
+        const durationMs = (hyperfocusSession.durationSeconds || 1800) * 1000;
+        const startedAt = hyperfocusSession.startedAt 
+          ? new Date(hyperfocusSession.startedAt).toISOString()
+          : new Date(now - durationMs).toISOString();
+        const endedAt = new Date().toISOString();
+        
+        const actualDurationMs = new Date(endedAt).getTime() - new Date(startedAt).getTime();
+        const durationMinutes = Math.max(1, Math.floor(actualDurationMs / 60000));
+        
+        const formData = new FormData();
+        formData.append('started_at', startedAt);
+        formData.append('ended_at', endedAt);
+        formData.append('duration_minutes', durationMinutes.toString());
+        
+        await axios.post(`${API}/focus-sessions`, formData);
+      } catch (error) {
+        console.error("Error saving focus session:", error);
+        // Don't block completion if save fails
+      }
+    }
+    
     setHyperfocusSession(null);
     clearHyperfocusSession();
     if (task && onCompleteTask) {
@@ -220,13 +246,13 @@ export default function FocusScreen({
       
       {/* Focus card - centered */}
       <div className="relative z-10 h-full flex items-center justify-center p-6">
-        <Card className="w-full max-w-2xl bg-background/95 backdrop-blur-sm border-2 shadow-2xl">
-          <div className="p-8 space-y-6">
+        <Card className="w-full max-w-5xl bg-background/95 backdrop-blur-sm border-2 shadow-2xl">
+          <div className="p-12 space-y-8">
             {/* Task title */}
             <div className="text-center">
-              <h1 className="text-3xl font-bold mb-2">{task.title}</h1>
+              <h1 className="text-5xl font-bold mb-4">{task.title}</h1>
               {task.description && (
-                <p className="text-muted-foreground text-lg">{task.description}</p>
+                <p className="text-muted-foreground text-xl">{task.description}</p>
               )}
             </div>
 

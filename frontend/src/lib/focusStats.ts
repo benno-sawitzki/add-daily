@@ -5,6 +5,7 @@ export interface FocusStats {
   todayCount: number;
   streak: number;
   lastDayWithFocus: string; // YYYY-MM-DD
+  lastResetDate?: string; // YYYY-MM-DD - for tracking manual resets
 }
 
 /**
@@ -126,5 +127,23 @@ function saveFocusStats(stats: FocusStats): void {
   } catch (error) {
     console.error("Error saving focus stats:", error);
   }
+}
+
+/**
+ * Reset today's focus count (manual reset)
+ */
+export function resetTodayFocusCount(): FocusStats {
+  const stats = getFocusStats();
+  const today = getTodayString();
+  
+  const updated: FocusStats = {
+    ...stats,
+    today,
+    todayCount: 0,
+    lastResetDate: today,
+  };
+  
+  saveFocusStats(updated);
+  return updated;
 }
 

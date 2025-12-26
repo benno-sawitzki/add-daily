@@ -1,10 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   DndContext,
   closestCorners,
-  PointerSensor,
-  useSensor,
-  useSensors,
   DragOverlay,
 } from "@dnd-kit/core";
 import {
@@ -18,40 +15,70 @@ import { Button } from "@/components/ui/button";
 import SortableTaskCard from "./SortableTaskCard";
 import NextSlot from "./NextSlot";
 import TaskEditDialog from "./TaskEditDialog";
-import axios from "axios";
 import { toast } from "sonner";
-
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+import { usePremiumSensors, premiumDropAnimation, dragOverlayStyles } from "@/utils/dndConfig";
+import { debouncedPersistReorder, cancelPendingPersistence } from "@/utils/reorderPersistence";
+import { persistSortOrder, persistWithRetry } from "@/utils/reorderWithSortOrder";
+import apiClient from "@/lib/apiClient";
+import { handleApiError } from "@/lib/apiErrorHandler";
 
 export default function InboxSplitView({
   inboxTasks,
-  nextTask,
+  nextTasks = [], // Changed from nextTask to nextTasks (array)
   onUpdateTask,
   onCreateTask,
   onDeleteTask,
   onRefreshTasks,
+  currentEnergy = 'medium',
+  onEnergyChange,
 }) {
   const [editingTask, setEditingTask] = useState(null); // null = closed, undefined = create mode, task object = edit mode
   const [activeId, setActiveId] = useState(null);
   const [localInboxTasks, setLocalInboxTasks] = useState(inboxTasks);
-  const [localNextTask, setLocalNextTask] = useState(nextTask);
+  const [localNextTasks, setLocalNextTasks] = useState(nextTasks);
   const [isReordering, setIsReordering] = useState(false);
+  const NEXT_TODAY_CAP = 1; // Next Today can only have 1 task max
+  const INBOX_CAP = 5; // Inbox can have 5 tasks max
 
   // Update local state when props change (but not during reordering)
+  // Only reconcile if server order differs AND we can do it without visible jumping
   useEffect(() => {
     if (!isReordering) {
+      // Check if the order actually changed to avoid unnecessary updates
+      const currentIds = localInboxTasks.map(t => t.id).join(',');
+      const newIds = inboxTasks.map(t => t.id).join(',');
+      
+      // Only update if IDs differ (new tasks added/removed) or if order changed significantly
+      if (currentIds !== newIds) {
+        // Check if it's just a reorder of the same tasks (avoid double-apply)
+        const currentIdSet = new Set(localInboxTasks.map(t => t.id));
+        const newIdSet = new Set(inboxTasks.map(t => t.id));
+        const idsMatch = currentIdSet.size === newIdSet.size && 
+                        [...currentIdSet].every(id => newIdSet.has(id));
+        
+        if (idsMatch) {
+          // Same tasks, just reordered - only update if priorities changed
+          // This prevents double-apply of reorder
+          const prioritiesChanged = localInboxTasks.some((task, idx) => {
+            const newTask = inboxTasks.find(t => t.id === task.id);
+            return newTask && newTask.priority !== task.priority;
+          });
+          
+          if (prioritiesChanged) {
+            setLocalInboxTasks(inboxTasks);
+          }
+        } else {
+          // Different tasks (added/removed) - always update
       setLocalInboxTasks(inboxTasks);
-      setLocalNextTask(nextTask);
+        }
+      }
+      
+      setLocalNextTasks(nextTasks);
     }
-  }, [inboxTasks, nextTask, isReordering]);
+  }, [inboxTasks, nextTasks, isReordering, localInboxTasks]);
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 6,
-      },
-    })
-  );
+  const sensors = usePremiumSensors();
+  const persistTimeoutRef = useRef(null);
 
   const handleDragStart = (event) => {
     setActiveId(event.active.id);
@@ -71,20 +98,20 @@ export default function InboxSplitView({
 
     // Case 1: Reordering within inbox
     if (overId === "inbox-dropzone" || localInboxTasks.some((t) => String(t.id) === overId)) {
-      if (activeId === String(localNextTask?.id)) {
-        // Dragging from Next to Inbox
-        const taskToMove = localNextTask;
+      if (localNextTasks.some((t) => String(t.id) === activeId)) {
+        // Dragging from Next Today to Inbox
+        const taskToMove = localNextTasks.find((t) => String(t.id) === activeId);
         try {
-          // Optimistic update
-          setLocalNextTask(null);
+          // Optimistic update: remove from Next Today, add to inbox
+          setLocalNextTasks((prev) => prev.filter((t) => String(t.id) !== activeId));
           setLocalInboxTasks((prev) => [taskToMove, ...prev]);
 
           // API call
-          await axios.post(`${API}/tasks/${activeId}/move-to-inbox`);
+          await apiClient.post(`/tasks/${activeId}/move-to-inbox`);
           await onRefreshTasks();
         } catch (error) {
           // Revert on error
-          setLocalNextTask(taskToMove);
+          setLocalNextTasks((prev) => [...prev, taskToMove]);
           setLocalInboxTasks((prev) => prev.filter((t) => String(t.id) !== activeId));
           console.error("Error moving task to inbox:", error);
           toast.error("Failed to move task to inbox");
@@ -99,143 +126,146 @@ export default function InboxSplitView({
           newIndex = 0;
         } else {
           // Dropped on another task
-          newIndex = localInboxTasks.findIndex((t) => String(t.id) === overId);
+          const overIndex = localInboxTasks.findIndex((t) => String(t.id) === overId);
           // If we couldn't find the target task, don't move
-          if (newIndex === -1) {
+          if (overIndex === -1) {
             console.warn(`Could not find target task with id: ${overId}`);
             return;
+          }
+          
+          // Correct index calculation for arrayMove
+          // arrayMove(array, fromIndex, toIndex) removes item at fromIndex, then inserts at toIndex
+          // The toIndex is the position in the RESULT array (after removal)
+          // When dragging down (oldIndex < overIndex): after removing oldIndex, overIndex becomes overIndex - 1
+          //   But we want the item to end up at the position where overIndex currently is
+          //   So we need to account for the shift: newIndex = overIndex (the target position)
+          // When dragging up (oldIndex > overIndex): no shift occurs, so newIndex = overIndex
+          // 
+          // However, dnd-kit's SortableContext provides the correct destination index via over.id
+          // The overIndex is already the correct final position we want
+          newIndex = overIndex;
+          
+          // Dev-only assertion to verify reorder logic
+          if (process.env.NODE_ENV === 'development') {
+            const testArray = ['A', 'B', 'C', 'D'];
+            const testFrom = 1;
+            const testTo = 2;
+            const testResult = arrayMove(testArray, testFrom, testTo);
+            const expected = ['A', 'C', 'B', 'D'];
+            if (JSON.stringify(testResult) !== JSON.stringify(expected)) {
+              console.warn('[REORDER] arrayMove test failed:', { testResult, expected });
+            }
           }
         }
 
         // Only proceed if we have a valid new position
-        if (oldIndex !== newIndex && newIndex !== -1) {
+        if (oldIndex !== newIndex && newIndex >= 0 && newIndex <= localInboxTasks.length) {
           const newTasks = arrayMove(localInboxTasks, oldIndex, newIndex);
-          await reorderTasksAndUpdatePriorities(newTasks);
+          reorderTasksAndUpdateSortOrder(newTasks);
         }
       }
       return;
     }
 
-    // Case 2: Dropping on Next slot
+    // Case 2: Dropping on Next Today slot
     if (overId === "next-slot") {
-      const taskToMakeNext = localInboxTasks.find((t) => String(t.id) === activeId) || localNextTask;
+      const taskToMakeNext = localInboxTasks.find((t) => String(t.id) === activeId) || 
+                             localNextTasks.find((t) => String(t.id) === activeId);
 
       if (!taskToMakeNext) return;
 
-      // If task is already next, no-op
-      if (String(localNextTask?.id) === activeId) return;
+      // Check if task is already in Next Today - allow reordering within Next Today
+      const isAlreadyNext = localNextTasks.some((t) => String(t.id) === activeId);
+      
+      // Check Next Today cap (1 task max)
+      if (!isAlreadyNext && localNextTasks.length >= NEXT_TODAY_CAP) {
+        toast.error(`Next Today is full (${NEXT_TODAY_CAP}). Finish or move something out first.`);
+        return;
+      }
 
-      const previousNext = localNextTask;
       try {
-        // Optimistic update: swap next task back to inbox, set new task as next
-        setLocalNextTask(taskToMakeNext);
-        setLocalInboxTasks((prev) => {
-          const withoutActive = prev.filter((t) => String(t.id) !== activeId);
-          if (previousNext) {
-            return [previousNext, ...withoutActive];
-          }
-          return withoutActive;
-        });
+        if (isAlreadyNext) {
+          // Task is already in Next Today - allow reordering within the list
+          // (Reordering logic would go here if needed, but for now we allow it)
+          return;
+        }
+        
+        // Optimistic update: add task to Next Today, remove from inbox
+        setLocalNextTasks((prev) => [...prev, taskToMakeNext]);
+        setLocalInboxTasks((prev) => prev.filter((t) => String(t.id) !== activeId));
 
         // API call
-        await axios.post(`${API}/tasks/${activeId}/make-next`);
+        await apiClient.post(`/tasks/${activeId}/make-next`);
         await onRefreshTasks();
       } catch (error) {
         // Revert on error
-        setLocalNextTask(previousNext);
-        setLocalInboxTasks((prev) => {
-          if (previousNext) {
-            return prev.filter((t) => String(t.id) !== String(previousNext.id));
-          }
-          return [...prev, taskToMakeNext];
+        setLocalNextTasks((prev) => prev.filter((t) => String(t.id) !== activeId));
+        setLocalInboxTasks((prev) => [...prev, taskToMakeNext]);
+        
+        // handleApiError already shows HTTP status and response body snippet
+        const errorMessage = handleApiError(error, "Failed to set task as next");
+        toast.error(errorMessage, {
+          id: 'make-next-error-drag', // Deduplicate
+          duration: 5000,
         });
-        console.error("Error making task next:", error);
-        toast.error("Failed to set task as next");
       }
       return;
     }
   };
 
-  // Helper function to reorder tasks and update priorities
-  const reorderTasksAndUpdatePriorities = async (newTasks) => {
+  // Helper function to reorder tasks using sort_order (single source of truth: arrayMove result)
+  const reorderTasksAndUpdateSortOrder = (newTasks) => {
+    // Safety check: if array is empty, just update state and return early
+    if (newTasks.length === 0) {
+      setIsReordering(true);
+      setLocalInboxTasks([]);
+      setIsReordering(false);
+      return;
+    }
+    
     // Prevent useEffect from resetting local state during reorder
     setIsReordering(true);
     
-    // Save original order and priorities before making changes (for error recovery)
+    // Save original order for error recovery
     const originalOrder = [...localInboxTasks];
-    const originalPriorities = new Map(originalOrder.map(t => [t.id, t.priority]));
     
-    // Optimistic update: update local state with new ORDER only
+    // OPTIMISTIC UPDATE: Update local state immediately with new order
+    // This is the single source of truth from arrayMove
     setLocalInboxTasks(newTasks);
 
-    // Calculate what priorities should be based on new position
-    const priorityUpdates = [];
-    newTasks.forEach((task, idx) => {
-      // More accurate priority calculation
-      // For 1 task: priority 4
-      // For 2 tasks: [4, 1]
-      // For 3 tasks: [4, 2, 1]
-      // For 4+ tasks: [4, 3, 2, 1] (distributed evenly)
-      let newPriority;
-      if (newTasks.length === 1) {
-        newPriority = 4;
-      } else if (newTasks.length === 2) {
-        newPriority = idx === 0 ? 4 : 1;
-      } else if (newTasks.length === 3) {
-        newPriority = idx === 0 ? 4 : (idx === 1 ? 2 : 1);
-      } else {
-        // 4+ tasks: distribute evenly from 4 to 1
-        newPriority = Math.max(1, Math.min(4, Math.ceil(4 - (idx * 3 / (newTasks.length - 1)))));
-      }
-      
-      const originalPriority = originalPriorities.get(task.id);
-      if (originalPriority !== newPriority) {
-        priorityUpdates.push({ taskId: task.id, originalPriority, newPriority });
-      }
-    });
+    // Update sort_order optimistically in local state (for UI consistency)
+    const tasksWithSortOrder = newTasks.map((task, index) => ({
+      ...task,
+      sort_order: index,
+    }));
+    setLocalInboxTasks(tasksWithSortOrder);
 
-    // Update priorities on backend directly (bypass optimistic updates)
-    // Only update priorities if the reorder is successfully persisted
-    try {
-      if (priorityUpdates.length > 0) {
-        // Update priorities directly via API (not through onUpdateTask to avoid optimistic updates)
-        await Promise.all(
-          priorityUpdates.map(({ taskId, newPriority }) =>
-            axios.patch(`${API}/tasks/${taskId}`, { priority: newPriority }).catch((error) => {
-              console.error(`Failed to update priority for task ${taskId}:`, error);
-              throw error; // Re-throw so Promise.all fails if any update fails
-            })
-          )
+    // DEBOUNCED PERSISTENCE: Persist sort_order to backend (batch update)
+    debouncedPersistReorder(
+      'inbox',
+      async () => {
+        // Use batch update endpoint for sort_order
+        await persistWithRetry(
+          () => persistSortOrder(newTasks, 'inbox'),
+          1, // 1 retry
+          1000 // 1 second delay
         );
         
-        // All priority updates succeeded - refresh tasks to sync global state
-        // This ensures the order and priorities are in sync
+        // Sync with server (but don't overwrite optimistic state if it matches)
         await onRefreshTasks();
         
         // Allow useEffect to sync with props again
         setIsReordering(false);
-      } else {
-        // No priority updates needed, just allow sync
+      },
+      (error) => {
+        // On error: keep optimistic UI, show error, but don't revert
+        // This keeps the UI usable even if persistence fails
         setIsReordering(false);
+        
+        // Error toast is shown by persistSortOrder, so we just log here
+        console.error("Failed to persist task order (UI order preserved):", error);
       }
-    } catch (error) {
-      // If priority updates fail, revert BOTH order AND priorities
-      // Restore original order with original priorities in local state
-      const restoredTasks = originalOrder.map(task => ({
-        ...task,
-        priority: originalPriorities.get(task.id) ?? task.priority
-      }));
-      setLocalInboxTasks(restoredTasks);
-      
-      // Refresh tasks from server to ensure global state matches
-      await onRefreshTasks();
-      
-      // Allow useEffect to sync with props again
-      setIsReordering(false);
-      
-      console.error("Failed to update task priorities:", error);
-      toast.error("Failed to save task order");
-    }
+    );
   };
 
   const handleSaveTask = async (taskId, taskData) => {
@@ -281,7 +311,7 @@ export default function InboxSplitView({
 
   const handleMoveToInbox = async (taskId) => {
     try {
-      await axios.post(`${API}/tasks/${taskId}/move-to-inbox`);
+      await apiClient.post(`/tasks/${taskId}/move-to-inbox`);
       await onRefreshTasks();
     } catch (error) {
       console.error("Error moving task to inbox:", error);
@@ -289,59 +319,72 @@ export default function InboxSplitView({
     }
   };
 
-  const handleMoveUp = async (taskId) => {
+  const handleMoveUp = (taskId) => {
     const currentIndex = localInboxTasks.findIndex((t) => String(t.id) === String(taskId));
     if (currentIndex <= 0) return; // Already at top or not found
+    if (localInboxTasks.length === 0) return; // Safety check: no tasks to reorder
 
     const newTasks = arrayMove(localInboxTasks, currentIndex, currentIndex - 1);
-    await reorderTasksAndUpdatePriorities(newTasks);
+    reorderTasksAndUpdateSortOrder(newTasks);
   };
 
-  const handleMoveDown = async (taskId) => {
+  const handleMoveDown = (taskId) => {
     const currentIndex = localInboxTasks.findIndex((t) => String(t.id) === String(taskId));
     if (currentIndex < 0 || currentIndex >= localInboxTasks.length - 1) return; // Already at bottom or not found
+    if (localInboxTasks.length === 0) return; // Safety check: no tasks to reorder
 
     const newTasks = arrayMove(localInboxTasks, currentIndex, currentIndex + 1);
-    await reorderTasksAndUpdatePriorities(newTasks);
+    reorderTasksAndUpdateSortOrder(newTasks);
   };
 
   const handleMakeNext = async (taskId) => {
+    // Auth guard - ensure user is available
+    if (!taskId) {
+      console.warn("handleMakeNext: taskId is missing");
+      return;
+    }
+
+    // Check if task is already in Next Today
+    const isAlreadyNext = localNextTasks.some((t) => String(t.id) === String(taskId));
+    if (isAlreadyNext) {
+      return; // Already in Next Today, no-op
+    }
+
+    // Check Next Today cap (1 task max)
+    if (localNextTasks.length >= NEXT_TODAY_CAP) {
+      toast.error(`Next Today is full (${NEXT_TODAY_CAP}). Finish or move something out first.`);
+      return;
+    }
+
     const taskToMakeNext = localInboxTasks.find((t) => String(t.id) === String(taskId));
-    if (!taskToMakeNext) return;
+    if (!taskToMakeNext) {
+      console.warn("handleMakeNext: task not found in inbox tasks:", taskId);
+      return;
+    }
 
-    const previousNext = localNextTask;
     try {
-      // Optimistic update
-      setLocalNextTask(taskToMakeNext);
-      setLocalInboxTasks((prev) => {
-        const withoutActive = prev.filter((t) => String(t.id) !== String(taskId));
-        if (previousNext) {
-          return [previousNext, ...withoutActive];
-        }
-        return withoutActive;
-      });
+      // Optimistic update: add task to Next Today, remove from inbox
+      setLocalNextTasks((prev) => [...prev, taskToMakeNext]);
+      setLocalInboxTasks((prev) => prev.filter((t) => String(t.id) !== String(taskId)));
 
-      // API call
-      await axios.post(`${API}/tasks/${taskId}/make-next`);
+      // API call - minimal payload (backend only updates status field)
+      await apiClient.post(`/tasks/${taskId}/make-next`);
       await onRefreshTasks();
-      toast.success("Task set as Next");
+      toast.success("Task added to Next Today");
     } catch (error) {
-      // Revert on error
-      setLocalNextTask(previousNext);
-      setLocalInboxTasks((prev) => {
-        if (previousNext) {
-          return prev.filter((t) => String(t.id) !== String(previousNext.id));
-        }
-        return [...prev, taskToMakeNext];
+      // Revert optimistic update on error
+      setLocalNextTasks((prev) => prev.filter((t) => String(t.id) !== String(taskId)));
+      setLocalInboxTasks((prev) => [...prev, taskToMakeNext]);
+      
+      toast.error(handleApiError(error, "Failed to set task as next"), {
+        id: 'make-next-error', // Deduplicate
+        duration: 5000,
       });
-      console.error("Error making task next:", error);
-      const errorMessage = error.response?.data?.detail || error.message || "Failed to set task as next";
-      toast.error(errorMessage);
     }
   };
 
   const activeTask = activeId
-    ? localInboxTasks.find((t) => String(t.id) === String(activeId)) || localNextTask
+    ? localInboxTasks.find((t) => String(t.id) === String(activeId)) || localNextTasks.find((t) => String(t.id) === String(activeId))
     : null;
 
   // Inbox droppable zone
@@ -360,7 +403,7 @@ export default function InboxSplitView({
     );
   }
 
-  if (localInboxTasks.length === 0 && !localNextTask) {
+  if (localInboxTasks.length === 0 && localNextTasks.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20" data-testid="inbox-empty">
         <div className="w-20 h-20 rounded-full bg-card flex items-center justify-center mb-6">
@@ -391,7 +434,7 @@ export default function InboxSplitView({
                 <h2 className="text-2xl font-semibold">Inbox</h2>
                 <div className="flex items-center gap-3">
                   <p className="text-muted-foreground">
-                    {localInboxTasks.length} {localInboxTasks.length === 1 ? "task" : "tasks"}
+                    {localInboxTasks.length}/{INBOX_CAP} {localInboxTasks.length === 1 ? "Task" : "Tasks"}
                   </p>
                   <Button
                     variant="outline"
@@ -412,7 +455,7 @@ export default function InboxSplitView({
 
             <InboxDropzone className="flex-1">
               <SortableContext
-                items={[...localInboxTasks.map((t) => t.id), ...(localNextTask ? [localNextTask.id] : [])]}
+                items={[...localInboxTasks.map((t) => String(t.id)), ...localNextTasks.map((t) => String(t.id))]}
                 strategy={verticalListSortingStrategy}
               >
                 {localInboxTasks.map((task, index) => (
@@ -430,16 +473,49 @@ export default function InboxSplitView({
                     onMoveUp={handleMoveUp}
                     onMoveDown={handleMoveDown}
                     onClick={() => setEditingTask(task)}
+                    activeId={activeId}
                   />
                 ))}
               </SortableContext>
             </InboxDropzone>
           </div>
 
-          {/* Next Column */}
+          {/* Next Today Column */}
           <div className="col-span-12 lg:col-span-6 flex flex-col">
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-1">
+                <h2 className="text-2xl font-semibold">Next Today</h2>
+                <p className="text-muted-foreground">
+                  {localNextTasks.length}/{NEXT_TODAY_CAP} {localNextTasks.length === 1 ? "Task" : "Tasks"}
+                </p>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Your priority tasks for today
+              </p>
+            </div>
+            
+            {/* Next Today Dropzone */}
+            <div
+              ref={(el) => {
+                if (el) {
+                  // Store ref for drag-and-drop
+                  el.setAttribute('data-dropzone', 'next-slot');
+                }
+              }}
+              id="next-slot"
+              className="flex-1 space-y-3 min-h-[200px]"
+            >
+              {localNextTasks.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full min-h-[200px] border-2 border-dashed border-border rounded-lg bg-card/30">
+                  <p className="text-sm text-muted-foreground text-center">
+                    Drag tasks from Inbox here
+                  </p>
+                </div>
+              ) : (
+                localNextTasks.map((task, index) => (
             <NextSlot
-              task={localNextTask}
+                    key={task.id}
+                    task={task}
               inboxTasks={localInboxTasks}
               onUpdateTask={onUpdateTask}
               onDeleteTask={onDeleteTask}
@@ -450,15 +526,20 @@ export default function InboxSplitView({
               onMakeNext={handleMakeNext}
               onCreateTask={onCreateTask}
               onRefreshTasks={onRefreshTasks}
+                    currentEnergy={currentEnergy}
+                    onEnergyChange={onEnergyChange || (() => {})}
             />
+                ))
+              )}
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Drag Overlay */}
-      <DragOverlay>
+      {/* Drag Overlay with premium styling */}
+      <DragOverlay dropAnimation={premiumDropAnimation}>
         {activeTask ? (
-          <div className="opacity-90">
+          <div style={dragOverlayStyles}>
             <SortableTaskCard
               task={activeTask}
               index={localInboxTasks.findIndex((t) => String(t.id) === String(activeId))}
@@ -472,6 +553,7 @@ export default function InboxSplitView({
               onMoveDown={handleMoveDown}
               onClick={() => {}}
               isDragging={true}
+              activeId={activeId}
             />
           </div>
         ) : null}
@@ -479,7 +561,7 @@ export default function InboxSplitView({
 
       {/* Edit/Create Dialog */}
       <TaskEditDialog
-        task={editingTask}
+        task={editingTask === undefined ? null : editingTask}
         open={editingTask !== null}
         onOpenChange={(open) => {
           if (!open) setEditingTask(null);

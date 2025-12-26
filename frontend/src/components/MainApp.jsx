@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import "@/App.css";
-import axios from "axios";
 import { toast } from "sonner";
+import apiClient from "@/lib/apiClient";
+import { handleApiError } from "@/lib/apiErrorHandler";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -23,29 +24,62 @@ import {
   User,
   ChevronDown,
   Brain,
+  BookOpen,
+  Archive,
 } from "lucide-react";
 import InboxSplitView from "@/components/InboxSplitView";
+import Logbook from "@/components/Logbook";
 import WeeklyCalendar from "@/components/WeeklyCalendar";
 import DailyCalendar from "@/components/DailyCalendar";
 import VoiceOverlay from "@/components/VoiceOverlay";
 import TaskQueue from "@/components/TaskQueue";
 import CompletedTasks from "@/components/CompletedTasks";
 import InboxFullModal from "@/components/InboxFullModal";
-import LaterModal from "@/components/LaterModal";
 import CarryoverModal from "@/components/CarryoverModal";
+import CommandCenter from "@/components/CommandCenter";
+import DebugPanel from "@/components/DebugPanel";
 import { useAuth } from "@/contexts/AuthContext";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation, Outlet } from "react-router-dom";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+// API client is now centralized in @/lib/apiClient
 
 // AI_MODELS constant removed - model is always GPT 5.2
 
 function MainApp() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [tasks, setTasks] = useState([]);
-  const [activeView, setActiveView] = useState("inbox");
+  
+  // Sync activeView with current route
+  const getActiveViewFromRoute = () => {
+    if (location.pathname.startsWith('/app/process')) {
+      return 'process';
+    }
+    if (location.pathname.startsWith('/app/dumps')) {
+      return 'dumps';
+    }
+    if (location.pathname === '/app' || location.pathname === '/app/inbox') {
+      return 'inbox'; // Default to inbox for /app or /app/inbox
+    }
+    // For other routes, extract from pathname or default to inbox
+    const pathParts = location.pathname.split('/');
+    if (pathParts[2]) {
+      const view = pathParts[2]; // e.g., /app/weekly -> 'weekly'
+      // Only allow valid tab values, default to inbox for unknown routes
+      const validViews = ['inbox', 'weekly', 'daily', 'completed', 'logbook', 'process', 'dumps'];
+      return validViews.includes(view) ? view : 'inbox';
+    }
+    return 'inbox';
+  };
+  
+  const [activeView, setActiveView] = useState(getActiveViewFromRoute());
+  
+  // Sync activeView when route changes
+  useEffect(() => {
+    const view = getActiveViewFromRoute();
+    setActiveView(view);
+  }, [location.pathname]);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
   const [settings, setSettings] = useState({
     ai_provider: "openai",
@@ -58,34 +92,144 @@ function MainApp() {
   const [showInboxFullModal, setShowInboxFullModal] = useState(false);
   const [pendingTask, setPendingTask] = useState(null);
   const [pendingTasks, setPendingTasks] = useState([]); // For batch operations
-  const [showLaterModal, setShowLaterModal] = useState(false);
   const [showCarryoverModal, setShowCarryoverModal] = useState(false);
+  const [currentEnergy, setCurrentEnergy] = useState("medium");
+  const [metricsRefreshTrigger, setMetricsRefreshTrigger] = useState(0);
+
+  // Track last shown error toast to prevent duplicates
+  const lastErrorToastRef = useRef({ message: null, timestamp: 0 });
+  const TOAST_DEBOUNCE_MS = 5000; // Don't show same error within 5 seconds
 
   const fetchTasks = useCallback(async () => {
-    try {
-      const response = await axios.get(`${API}/tasks`);
-      setTasks(response.data);
-    } catch (error) {
-      console.error("Error fetching tasks:", error);
-      toast.error("Failed to fetch tasks");
+    if (!user?.id) {
+      console.log("fetchTasks: User not available yet, skipping");
+      return;
     }
-  }, []);
+    
+    try {
+      const response = await apiClient.get('/tasks');
+      setTasks(response.data || []);
+      // Clear error state on success
+      lastErrorToastRef.current = { message: null, timestamp: 0 };
+    } catch (error) {
+      const errorDetails = {
+        message: error.message,
+        response: error.response?.data,
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        user_id: user?.id,
+      };
+      console.error("Error fetching tasks:", errorDetails);
+      
+      // Extract error message
+      const errorMessage = error.response?.data?.detail || error.message || "Unknown error";
+      const errorMsg = errorMessage.includes("completed_at") 
+        ? "Database schema issue: Please run the migration to add completed_at column"
+        : process.env.NODE_ENV === 'development' 
+          ? `Failed to fetch tasks: ${errorMessage}`
+          : "Failed to fetch tasks";
+      
+      // Deduplicate toast: only show if different message or enough time passed
+      const now = Date.now();
+      const shouldShowToast = 
+        lastErrorToastRef.current.message !== errorMsg ||
+        (now - lastErrorToastRef.current.timestamp) > TOAST_DEBOUNCE_MS;
+      
+      if (shouldShowToast) {
+        toast.error(errorMsg, {
+          id: 'fetch-tasks-error', // Use fixed ID to deduplicate
+          duration: 5000,
+        });
+        lastErrorToastRef.current = { message: errorMsg, timestamp: now };
+      }
+      
+      // Don't clear tasks on error - keep existing UI usable
+      // If this is the first fetch and we have no tasks yet, keep empty array
+      // UI will show empty state gracefully
+    }
+  }, [user]);
 
   const fetchSettings = useCallback(async () => {
     try {
-      const response = await axios.get(`${API}/settings`);
+      const response = await apiClient.get('/settings');
       setSettings(response.data);
     } catch (error) {
       console.error("Error fetching settings:", error);
     }
   }, []);
 
-  useEffect(() => {
-    fetchTasks();
-    fetchSettings();
-  }, [fetchTasks, fetchSettings]);
+  // Fetch user preferences (energy level)
+  const fetchUserPreferences = useCallback(async () => {
+    try {
+      const response = await apiClient.get('/user/preferences');
+      if (response.data.energy_level) {
+        setCurrentEnergy(response.data.energy_level);
+      }
+    } catch (error) {
+      console.error("Error fetching user preferences:", error);
+      // Fallback to localStorage
+      try {
+        const stored = localStorage.getItem('user_energy');
+        if (stored) setCurrentEnergy(stored);
+      } catch {}
+    }
+  }, []);
 
+  const handleEnergyChange = async (energy) => {
+    setCurrentEnergy(energy);
+    // Persist to backend
+    try {
+      const formData = new FormData();
+      formData.append('energy_level', energy);
+      await apiClient.post('/user/preferences', formData);
+    } catch (error) {
+      console.error("Error saving energy preference:", error);
+      // Fallback to localStorage
+      try {
+        localStorage.setItem('user_energy', energy);
+      } catch {}
+    }
+  };
+
+  useEffect(() => {
+    // Only fetch when user is available
+    if (user?.id) {
+      fetchTasks();
+      fetchSettings();
+      fetchUserPreferences();
+    }
+  }, [user?.id, fetchTasks, fetchSettings, fetchUserPreferences]);
+
+  // Refetch tasks when navigating to inbox or process view (to catch tasks created elsewhere)
+  useEffect(() => {
+    if (user?.id && (location.pathname === '/app' || location.pathname === '/app/inbox' || location.pathname === '/app/process')) {
+      fetchTasks();
+    }
+  }, [location.pathname, user?.id, fetchTasks]);
+
+  // Listen for task refresh events from ProcessingPage (when tasks are promoted)
+  useEffect(() => {
+    const handleTaskRefresh = () => {
+      if (user?.id) {
+        fetchTasks();
+      }
+    };
+
+    window.addEventListener('refresh-tasks', handleTaskRefresh);
+    return () => {
+      window.removeEventListener('refresh-tasks', handleTaskRefresh);
+    };
+  }, [user?.id, fetchTasks]);
+
+  /**
+   * Unified task update function - used by all views
+   * Handles optimistic updates and error recovery
+   */
   const updateTask = async (taskId, updates) => {
+    // Find the task to check if status is actually changing
+    const currentTask = tasks.find(t => t.id === taskId);
+    const statusChanged = updates.status && currentTask?.status !== updates.status;
+    
     // Optimistic update: update UI immediately for better UX
     setTasks(prevTasks => 
       prevTasks.map(task => 
@@ -94,28 +238,62 @@ function MainApp() {
     );
     
     try {
-      const response = await axios.patch(`${API}/tasks/${taskId}`, updates);
+      const response = await apiClient.patch(`/tasks/${taskId}`, updates);
       // Update with server response (more accurate, includes computed fields)
       setTasks(prevTasks => 
         prevTasks.map(task => 
           task.id === taskId ? response.data : task
         )
       );
+      
+      // If status changed (e.g., to/from completed, inbox, next), refetch to ensure badge counts are accurate
+      if (statusChanged) {
+        // Refetch tasks to ensure badge counts match the actual task list
+        await fetchTasks();
+      }
+      
+      // Refresh Command Center metrics if status changed to/from completed
+      // This ensures done task count is updated in Command Center
+      // Do this regardless of statusChanged to ensure metrics always refresh
+      if (updates.status === 'completed' || currentTask?.status === 'completed') {
+        setMetricsRefreshTrigger(prev => prev + 1);
+      }
+      
       // Don't show toast for drag-and-drop updates (too noisy)
       // toast.success("Task updated");
     } catch (error) {
       // Revert optimistic update on error
       await fetchTasks();
-      console.error("Error updating task:", error);
-      toast.error("Failed to update task");
+      
+      // handleApiError already shows HTTP status and response body snippet
+      const errorMessage = handleApiError(error, "Failed to update task");
+      toast.error(errorMessage);
     }
+  };
+
+  /**
+   * Unified task schedule update - used by calendar views
+   * Normalizes payload to ensure consistent format
+   */
+  const updateTaskSchedule = async (taskId, { scheduled_date, scheduled_time, duration = null }) => {
+    const payload = {
+      scheduled_date,
+      scheduled_time,
+      status: "scheduled",
+    };
+    
+    if (duration !== null && duration !== undefined) {
+      payload.duration = duration;
+    }
+    
+    return updateTask(taskId, payload);
   };
 
   const createTask = async (taskData) => {
     const currentInboxCount = tasks.filter((t) => t.status === "inbox").length;
     
-    // Check inbox cap (7 tasks max) - only for inbox status
-    if ((taskData.status === "inbox" || !taskData.status) && currentInboxCount >= 7) {
+    // Check inbox cap (5 tasks max) - only for inbox status
+    if ((taskData.status === "inbox" || !taskData.status) && currentInboxCount >= 5) {
       // Inbox is full - show modal
       setPendingTask(taskData);
       setShowInboxFullModal(true);
@@ -124,7 +302,7 @@ function MainApp() {
     
     // Can add directly
     try {
-      const response = await axios.post(`${API}/tasks`, {
+      const response = await apiClient.post('/tasks', {
         ...taskData,
         status: taskData.status || "inbox",
       });
@@ -144,21 +322,68 @@ function MainApp() {
   };
 
   const deleteTask = async (taskId) => {
-    // Optimistic update: remove from UI immediately
+    // Find the task to delete
     const deletedTask = tasks.find(t => t.id === taskId);
+    if (!deletedTask) {
+      console.warn("[DELETE] Task not found in local state:", taskId);
+      return;
+    }
+    
+    const remainingTasks = tasks.filter(t => t.id !== taskId);
+    const remainingInboxTasks = remainingTasks.filter(t => t.status === "inbox");
+    const isLastInboxTask = remainingInboxTasks.length === 0 && deletedTask.status === "inbox";
+    const wasNextTask = deletedTask.status === "next";
+    
+    console.log("[DELETE] Starting deletion:", {
+      taskId,
+      deletedTaskTitle: deletedTask.title,
+      deletedTaskStatus: deletedTask.status,
+      remainingInboxCount: remainingInboxTasks.length,
+      isLastInboxTask,
+      wasNextTask,
+      totalTasksBefore: tasks.length,
+      totalTasksAfter: remainingTasks.length
+    });
+    
+    // Optimistic update: remove from UI immediately
     setTasks(prevTasks => prevTasks.filter(t => t.id !== taskId));
     
     try {
-      await axios.delete(`${API}/tasks/${taskId}`);
-      // Don't show toast for every delete (too noisy)
-      // toast.success("Task deleted");
+      await apiClient.delete(`/tasks/${taskId}`);
+      // Refetch tasks to ensure UI is in sync with server state
+      // This ensures badge counts match the actual task list
+      await fetchTasks();
     } catch (error) {
       // Revert optimistic update on error
-      if (deletedTask) {
-        setTasks(prevTasks => [...prevTasks, deletedTask]);
+      await fetchTasks();
+      
+      // Enhanced error logging
+      const errorDetails = {
+        taskId,
+        errorMessage: error.message,
+        errorResponse: error.response?.data,
+        errorStatus: error.response?.status,
+        errorStatusText: error.response?.statusText,
+        isLastInboxTask,
+        wasNextTask,
+        deletedTaskStatus: deletedTask.status,
+        requestUrl: `/tasks/${taskId}`,
+        requestMethod: 'DELETE'
+      };
+      
+      console.error("[DELETE] Error deleting task:", errorDetails);
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.error("[DELETE] Full error object:", error);
+        console.error("[DELETE] Error stack:", error.stack);
       }
-      console.error("Error deleting task:", error);
-      toast.error("Failed to delete task");
+      
+      // handleApiError already shows HTTP status and response body snippet
+      const errorMessage = handleApiError(error, "Failed to delete task");
+      toast.error(errorMessage);
+      
+      // Re-throw for caller to handle if needed
+      throw error;
     }
   };
 
@@ -189,7 +414,7 @@ function MainApp() {
         provider: settings.ai_provider 
       });
       
-      const response = await axios.post(`${API}/tasks/process-voice-queue`, {
+      const response = await apiClient.post('/tasks/process-voice-queue', {
         transcript,
         model: settings.ai_model,
         provider: settings.ai_provider,
@@ -270,7 +495,7 @@ function MainApp() {
       setActiveView("weekly");
     
     try {
-      const response = await axios.post(`${API}/tasks/push-to-calendar`, {
+      const response = await apiClient.post('/tasks/push-to-calendar', {
         tasks: tasksToPush,
       });
       
@@ -307,12 +532,12 @@ function MainApp() {
     const tasksToPush = tasksToPushOverride || queuedTasks;
     const taskCount = tasksToPush.length;
     const currentInboxCount = tasks.filter((t) => t.status === "inbox").length;
-    const availableSlots = 7 - currentInboxCount;
+    const availableSlots = 5 - currentInboxCount;
     
     // Check inbox cap
     if (availableSlots <= 0) {
       // No slots available - show modal for all tasks
-      toast.warning(`Inbox is full (7 tasks). Please choose what to do with ${taskCount} task${taskCount > 1 ? 's' : ''}.`);
+      toast.warning(`Inbox is full (5 tasks). Please choose what to do with ${taskCount} task${taskCount > 1 ? 's' : ''}.`);
       setPendingTasks(tasksToPush);
       if (tasksToPush.length > 0) {
         setPendingTask(tasksToPush[0]);
@@ -327,7 +552,7 @@ function MainApp() {
       // Add tasks that fit
       const tasksToFit = [...tasksThatFit];
       try {
-        const response = await axios.post(`${API}/tasks/push-to-inbox`, {
+        const response = await apiClient.post('/tasks/push-to-inbox', {
           tasks: tasksToFit,
         });
         
@@ -353,7 +578,21 @@ function MainApp() {
         return;
       } catch (error) {
         console.error("Error pushing tasks to inbox:", error);
-        toast.error("Failed to add some tasks to inbox");
+        const errorDetail = error.response?.data?.detail || error.message || "Unknown error";
+        let errorMessage = "Failed to add some tasks to inbox";
+        
+        // Extract exact missing column/table info from error message
+        if (errorDetail.includes("Missing") || errorDetail.includes("column") || errorDetail.includes("does not exist")) {
+          // Use the exact error message from backend (it now includes column names)
+          errorMessage = errorDetail;
+        } else if (process.env.NODE_ENV === 'development') {
+          errorMessage = `Failed to add tasks: ${errorDetail}`;
+        }
+        
+        toast.error(errorMessage, {
+          id: 'push-to-inbox-partial-error',
+          duration: 7000, // Longer duration for migration messages
+        });
         return;
       }
     }
@@ -375,7 +614,7 @@ function MainApp() {
       setActiveView("inbox");
     
     try {
-      const response = await axios.post(`${API}/tasks/push-to-inbox`, {
+      const response = await apiClient.post('/tasks/push-to-inbox', {
         tasks: tasksToPush,
       });
       
@@ -397,8 +636,24 @@ function MainApp() {
         prevTasks.filter(t => !optimisticTasks.some(ot => ot.id === t.id))
       );
       console.error("Error pushing to inbox:", error);
-      const errorMessage = error.response?.data?.detail || error.message || "Failed to push tasks to inbox";
-      toast.error(errorMessage);
+      
+      // Extract and show helpful error message
+      const errorDetail = error.response?.data?.detail || error.message || "Unknown error";
+      let errorMessage = "Failed to push tasks to inbox";
+      
+      // Extract exact missing column/table info from error message
+      if (errorDetail.includes("Missing") || errorDetail.includes("column") || errorDetail.includes("does not exist")) {
+        // Use the exact error message from backend (it now includes column names)
+        errorMessage = errorDetail;
+      } else if (process.env.NODE_ENV === 'development') {
+        errorMessage = `Failed to push tasks to inbox: ${errorDetail}`;
+      }
+      
+      toast.error(errorMessage, {
+        id: 'push-to-inbox-error', // Deduplicate
+        duration: 7000, // Longer duration for migration messages
+      });
+      
       // Restore queue on error (only if not using override)
       if (!tasksToPushOverride) {
         setQueuedTasks(tasksToPush);
@@ -417,7 +672,7 @@ function MainApp() {
   const reprocessTranscript = async (editedTranscript) => {
     setIsLoading(true);
     try {
-      const response = await axios.post(`${API}/tasks/process-voice-queue`, {
+      const response = await apiClient.post('/tasks/process-voice-queue', {
         transcript: editedTranscript,
         model: settings.ai_model,
         provider: settings.ai_provider,
@@ -443,111 +698,79 @@ function MainApp() {
   // Settings are now fixed to GPT 5.2
   // updateSettings function removed - model is always GPT 5.2
 
+  // Compute filtered task lists from the same source of truth (tasks state)
+  // These are computed values that update when tasks state changes
   const inboxTasks = tasks.filter((t) => t.status === "inbox");
-  const nextTask = tasks.find((t) => t.status === "next") || null;
+  const nextTasks = tasks.filter((t) => t.status === "next"); // Next Today tasks (cap: 1)
   const completedTasks = tasks.filter((t) => t.status === "completed");
-  const laterTasks = tasks.filter((t) => t.status === "later");
+  const focusTasks = tasks.filter((t) => t.status === "focus");
+  
+  // Debug logging (dev only) to track task counts and badge counts
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      console.log('[TASK COUNTS DEBUG]', {
+        totalTasks: tasks.length,
+        inboxTasks: inboxTasks.length,
+        completedTasks: completedTasks.length,
+        nextTasks: nextTasks.length,
+        focusTasks: focusTasks.length,
+        endpoint: '/tasks',
+        source: 'MainApp tasks state (from GET /tasks)',
+        timestamp: new Date().toISOString(),
+      });
+    }
+  }, [tasks, inboxTasks.length, completedTasks.length, nextTasks.length, focusTasks.length]);
   
   // Handlers for InboxFullModal
   const handleSetAsNext = async () => {
     if (!pendingTask) return;
     
-    const currentInboxCount = tasks.filter((t) => t.status === "inbox").length;
-    const hasNextTask = nextTask !== null;
+    const nextTasksCount = nextTasks.length;
+    const NEXT_TODAY_CAP = 1;
     
-    // If inbox is full (7 tasks) and there's no existing Next task to swap with,
-    // we need to create the task directly with "next" status instead of going through inbox
-    if (currentInboxCount >= 7 && !hasNextTask) {
-      try {
-        // Create task directly with "next" status (bypassing inbox)
-        const response = await axios.post(`${API}/tasks`, {
-          ...pendingTask,
-          status: "next",
-        });
-        
-        if (!response.data || !response.data.id) {
-          throw new Error("Failed to create task");
-        }
-        
-        await fetchTasks();
-        toast.success("Task set as Next!");
-        
-        // Process next pending task if any
-        processNextPendingTask();
-      } catch (error) {
-        console.error("Error creating task as next:", error);
-        const errorMessage = error.response?.data?.detail || error.message || "Failed to set task as next";
-        toast.error(errorMessage);
-      }
-    } else {
-      // Normal flow: save to inbox first, then set as next (swap will handle inbox cap)
-      try {
-        // Save task to inbox first to get a real ID, then set as next
-        const response = await axios.post(`${API}/tasks/push-to-inbox`, {
-          tasks: [pendingTask],
-        });
-        
-        if (!response.data.tasks || response.data.tasks.length === 0) {
-          throw new Error("Failed to save task");
-        }
-        
-        const savedTask = response.data.tasks[0];
-        
-        // Set as next (will swap if next already exists, keeping inbox at 7)
-        await axios.post(`${API}/tasks/${savedTask.id}/make-next`);
-        
-        await fetchTasks();
-        toast.success("Task set as Next!");
-        
-        // Process next pending task if any
-        processNextPendingTask();
-      } catch (error) {
-        console.error("Error setting task as next:", error);
-        const errorMessage = error.response?.data?.detail || error.message || "Failed to set task as next";
-        toast.error(errorMessage);
-      }
+    // Check Next Today cap
+    if (nextTasksCount >= NEXT_TODAY_CAP) {
+      toast.error(`Next Today is full (${NEXT_TODAY_CAP}). Finish or move something out first.`);
+      return;
     }
-  };
-  
-  const handleSendToLater = async () => {
-    if (!pendingTask) return;
     
+    // Create task directly with "next" status (NEXT_TODAY)
+    // No inbox cap checks - Next Today is independent of inbox
     try {
-      // Save task to inbox first, then move to later
-      const response = await axios.post(`${API}/tasks/push-to-inbox`, {
-        tasks: [{ ...pendingTask, status: "inbox" }],
+      const response = await apiClient.post('/tasks', {
+        ...pendingTask,
+        status: "next",
       });
       
-      if (!response.data.tasks || response.data.tasks.length === 0) {
-        throw new Error("Failed to save task");
+      if (!response.data || !response.data.id) {
+        throw new Error("Failed to create task");
       }
       
-      const savedTask = response.data.tasks[0];
-      
-      // Move to later with expiration
-      await axios.post(`${API}/tasks/${savedTask.id}/move-to-later`);
-      
       await fetchTasks();
-      toast.success("Task moved to Later (expires in 14 days)");
+      toast.success("Task set as Next!");
       
       // Process next pending task if any
       processNextPendingTask();
     } catch (error) {
-      console.error("Error moving task to later:", error);
-      const errorMessage = error.response?.data?.detail || error.message || "Failed to move task to later";
-      toast.error(errorMessage);
+      // handleApiError already shows HTTP status and response body snippet
+      const errorMessage = handleApiError(error, "Failed to set task as next");
+      toast.error(errorMessage, {
+        id: 'create-next-error', // Deduplicate
+        duration: 5000,
+      });
     }
   };
+  
   
   const handleReplaceTask = async (replaceTaskId) => {
     if (!pendingTask) return;
     
     try {
       // Delete the task to replace
-      await axios.delete(`${API}/tasks/${replaceTaskId}`);
+      await apiClient.delete(`/tasks/${replaceTaskId}`);
       
       // Create new task
-      const response = await axios.post(`${API}/tasks/push-to-inbox`, {
+      const response = await apiClient.post('/tasks/push-to-inbox', {
         tasks: [{ ...pendingTask, status: "inbox" }],
       });
       
@@ -591,11 +814,11 @@ function MainApp() {
     setShowInboxFullModal(false);
   };
 
-  const handleCarryoverKeepSelected = async ({ keepTasks, moveToLater }) => {
+  const handleCarryoverKeepSelected = async ({ keepTasks, moveToRemove }) => {
     try {
-      // Move unselected tasks to Later
-      const movePromises = moveToLater.map(task =>
-        axios.post(`${API}/tasks/${task.id}/move-to-later`)
+      // Move unselected tasks back to inbox (removed from Next Today)
+      const movePromises = moveToRemove.map(task =>
+        apiClient.post(`/tasks/${task.id}/move-to-inbox`)
       );
 
       await Promise.all(movePromises);
@@ -604,10 +827,10 @@ function MainApp() {
       await fetchTasks();
       
       const keptCount = keepTasks.length;
-      const movedCount = moveToLater.length;
+      const removedCount = moveToRemove.length;
       
-      if (movedCount > 0) {
-        toast.success(`${movedCount} task${movedCount === 1 ? '' : 's'} moved to Later. ${keptCount} task${keptCount === 1 ? '' : 's'} kept.`);
+      if (removedCount > 0) {
+        toast.success(`${removedCount} task${removedCount === 1 ? '' : 's'} removed from Next Today. ${keptCount} task${keptCount === 1 ? '' : 's'} kept.`);
       } else {
         toast.success("All tasks kept for tomorrow");
       }
@@ -643,7 +866,7 @@ function MainApp() {
           {/* Center: Navigation Tabs */}
           <div className="flex justify-center">
             <TabsList className="bg-card/50 p-1" data-testid="view-tabs">
-              <TabsTrigger value="inbox" className="gap-2" data-testid="tab-inbox">
+              <TabsTrigger value="inbox" className="gap-2" data-testid="tab-inbox" onClick={() => navigate('/app/inbox')}>
                 <Inbox className="w-4 h-4" />
                 Inbox
                 {inboxTasks.length > 0 && (
@@ -651,28 +874,16 @@ function MainApp() {
                     {inboxTasks.length}
                   </span>
                 )}
-                {laterTasks.length > 0 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowLaterModal(true);
-                    }}
-                    className="ml-1 text-xs text-muted-foreground hover:text-foreground"
-                    title="Later tasks"
-                  >
-                    Later ({laterTasks.length})
-                  </button>
-                )}
               </TabsTrigger>
-              <TabsTrigger value="weekly" className="gap-2" data-testid="tab-weekly">
+              <TabsTrigger value="weekly" className="gap-2" data-testid="tab-weekly" onClick={() => navigate('/app/weekly')}>
                 <Calendar className="w-4 h-4" />
                 Weekly
               </TabsTrigger>
-              <TabsTrigger value="daily" className="gap-2" data-testid="tab-daily">
+              <TabsTrigger value="daily" className="gap-2" data-testid="tab-daily" onClick={() => navigate('/app/daily')}>
                 <CalendarDays className="w-4 h-4" />
                 Daily
               </TabsTrigger>
-              <TabsTrigger value="completed" className="gap-2" data-testid="tab-completed">
+              <TabsTrigger value="completed" className="gap-2" data-testid="tab-completed" onClick={() => navigate('/app/completed')}>
                 <CheckCircle2 className="w-4 h-4" />
                 Done
                 {completedTasks.length > 0 && (
@@ -680,6 +891,14 @@ function MainApp() {
                     {completedTasks.length}
                   </span>
                 )}
+              </TabsTrigger>
+              <TabsTrigger value="dumps" className="gap-2" data-testid="tab-dumps" onClick={() => navigate('/app/dumps')}>
+                <Archive className="w-4 h-4" />
+                Dumps
+              </TabsTrigger>
+              <TabsTrigger value="logbook" className="gap-2" data-testid="tab-logbook" onClick={() => navigate('/app/logbook')}>
+                <BookOpen className="w-4 h-4" />
+                Logbook
               </TabsTrigger>
             </TabsList>
           </div>
@@ -738,15 +957,33 @@ function MainApp() {
       {/* Main Content */}
       <main className="flex-1 p-6 w-full" data-testid="main-content">
         <TabsContent value="inbox" data-testid="inbox-view">
-            <InboxSplitView
-              inboxTasks={inboxTasks}
-              nextTask={nextTask}
-              onUpdateTask={updateTask}
-              onCreateTask={createTask}
-              onDeleteTask={deleteTask}
-              onRefreshTasks={fetchTasks}
-            />
-          </TabsContent>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Left: Tasks List (8 columns) */}
+            <div className="lg:col-span-8">
+              <InboxSplitView
+                inboxTasks={inboxTasks}
+                nextTasks={nextTasks}
+                onUpdateTask={updateTask}
+                onCreateTask={createTask}
+                onDeleteTask={deleteTask}
+                onRefreshTasks={fetchTasks}
+                currentEnergy={currentEnergy}
+                onEnergyChange={handleEnergyChange}
+              />
+            </div>
+            {/* Right: Command Center (4 columns) */}
+            <div className="lg:col-span-4">
+              <CommandCenter
+                nextTasks={nextTasks}
+                focusTasks={focusTasks}
+                currentEnergy={currentEnergy}
+                onEnergyChange={handleEnergyChange}
+                userId={user?.id}
+                refreshTrigger={metricsRefreshTrigger}
+              />
+            </div>
+          </div>
+        </TabsContent>
 
           <TabsContent value="weekly" data-testid="weekly-view">
             <WeeklyCalendar
@@ -772,14 +1009,33 @@ function MainApp() {
               onDeleteTask={deleteTask}
             />
           </TabsContent>
+
+            <TabsContent value="logbook" data-testid="logbook-view">
+              <Logbook 
+                userId={user?.id}
+                completedTasks={completedTasks}
+                onRestoreTask={updateTask}
+                onRefreshTasks={fetchTasks}
+                allTasks={tasks}
+              />
+            </TabsContent>
+
+            {/* Process route renders directly (no tab trigger) */}
+            {activeView === 'process' && (
+              <div data-testid="process-view">
+                <Outlet />
+              </div>
+            )}
+            {/* Dumps routes render via TabsContent (has tab trigger) */}
+            <TabsContent value="dumps" data-testid="dumps-view">
+              <Outlet />
+            </TabsContent>
       </main>
 
       {/* Voice Overlay */}
       {isVoiceActive && (
         <VoiceOverlay
           onClose={() => setIsVoiceActive(false)}
-          onProcess={processVoiceInput}
-          isLoading={isLoading}
         />
       )}
 
@@ -798,28 +1054,6 @@ function MainApp() {
         />
       )}
 
-      {/* Later Modal */}
-      <LaterModal
-        open={showLaterModal}
-        onOpenChange={setShowLaterModal}
-        laterTasks={laterTasks}
-        onMoveToInbox={async (taskId) => {
-          const currentInboxCount = tasks.filter((t) => t.status === "inbox").length;
-          if (currentInboxCount >= 7) {
-            toast.error("Inbox is full (7 tasks max). Please remove a task first.");
-            return;
-          }
-          try {
-            await axios.post(`${API}/tasks/${taskId}/move-to-inbox`);
-            await fetchTasks();
-            toast.success("Task moved to Inbox");
-          } catch (error) {
-            console.error("Error moving task to inbox:", error);
-            toast.error("Failed to move task to inbox");
-          }
-        }}
-        onDeleteTask={deleteTask}
-      />
 
       {/* Inbox Full Modal */}
       <InboxFullModal
@@ -828,7 +1062,6 @@ function MainApp() {
         taskToAdd={pendingTask}
         existingInboxTasks={inboxTasks}
         onSetAsNext={handleSetAsNext}
-        onSendToLater={handleSendToLater}
         onReplaceTask={handleReplaceTask}
         onCancel={handleCancelPendingTask}
       />
@@ -837,11 +1070,14 @@ function MainApp() {
       <CarryoverModal
         open={showCarryoverModal}
         onOpenChange={setShowCarryoverModal}
-        nextTask={nextTask}
+        nextTask={nextTasks.length > 0 ? nextTasks[0] : null}
         inboxTasks={inboxTasks}
         onKeepSelected={handleCarryoverKeepSelected}
         onSkipToday={handleCarryoverSkipToday}
       />
+      
+      {/* Debug Panel - shows API calls in dev mode */}
+      <DebugPanel />
     </Tabs>
   );
 }

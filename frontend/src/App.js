@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react";
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, Outlet } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { Toaster } from "sonner";
 import LandingPage from "@/components/LandingPage";
 import MainApp from "@/components/MainApp";
 import FocusScreen from "@/components/FocusScreen";
 import AuthCallback from "@/components/AuthCallback";
+import DumpsListPage from "@/components/DumpsListPage";
+import DumpDetailPage from "@/components/DumpDetailPage";
+import ProcessingPage from "@/components/ProcessingPage";
 import { Loader2 } from "lucide-react";
 import axios from "axios";
 import "@/App.css";
@@ -123,6 +126,22 @@ const FocusScreenWrapper = () => {
   );
 };
 
+// Dumps pages wrapper that provides user context
+const DumpsListWrapper = () => {
+  const { user } = useAuth();
+  return <DumpsListPage userId={user?.id} />;
+};
+
+const DumpDetailWrapper = () => {
+  const { user } = useAuth();
+  return <DumpDetailPage userId={user?.id} />;
+};
+
+const ProcessingWrapper = () => {
+  const { user } = useAuth();
+  return <ProcessingPage userId={user?.id} />;
+};
+
 function AppRoutes() {
   return (
     <Routes>
@@ -142,7 +161,18 @@ function AppRoutes() {
             <MainApp />
           </ProtectedRoute>
         }
-      />
+      >
+        {/* Nested routes under /app - these render inside MainApp via Outlet */}
+        {/* Views that render via TabsContent in MainApp (no separate component needed) */}
+        <Route path="inbox" element={null} />
+        <Route path="weekly" element={null} />
+        <Route path="daily" element={null} />
+        <Route path="completed" element={null} />
+        <Route path="logbook" element={null} />
+        <Route path="process" element={<ProcessingWrapper />} />
+        <Route path="dumps" element={<DumpsListWrapper />} />
+        <Route path="dumps/:id" element={<DumpDetailWrapper />} />
+      </Route>
       <Route
         path="/app/focus"
         element={

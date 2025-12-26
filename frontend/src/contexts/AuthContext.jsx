@@ -1,12 +1,17 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
-const API = process.env.REACT_APP_BACKEND_URL;
+// Use proxy in development, REACT_APP_BACKEND_URL in production
+const getApiBase = () => {
+  if (process.env.NODE_ENV === 'development') {
+    // In development, use proxy: requests to /api/* are proxied to backend
+    return '';
+  }
+  // In production, use REACT_APP_BACKEND_URL
+  return process.env.REACT_APP_BACKEND_URL || 'http://localhost:8010';
+};
 
-// Validate API URL is set
-if (!API) {
-  console.error('REACT_APP_BACKEND_URL is not set! Authentication will not work.');
-}
+const API_BASE = getApiBase();
 
 const AuthContext = createContext(null);
 
@@ -45,7 +50,8 @@ export const AuthProvider = ({ children }) => {
     }
 
     try {
-      const response = await axios.get(`${API}/api/auth/me`, {
+      const url = API_BASE ? `${API_BASE}/api/auth/me` : '/api/auth/me';
+      const response = await axios.get(url, {
         headers: { Authorization: `Bearer ${storedToken}` }
       });
       setUser(response.data);
@@ -65,11 +71,9 @@ export const AuthProvider = ({ children }) => {
   }, [verifyToken]);
 
   const signup = async (email, password, name) => {
-    if (!API) {
-      throw new Error('Backend URL is not configured. Please set REACT_APP_BACKEND_URL environment variable.');
-    }
     try {
-      const response = await axios.post(`${API}/api/auth/signup`, {
+      const url = API_BASE ? `${API_BASE}/api/auth/signup` : '/api/auth/signup';
+      const response = await axios.post(url, {
         email,
         password,
         name
@@ -81,7 +85,14 @@ export const AuthProvider = ({ children }) => {
       return userData;
     } catch (error) {
       console.error('Signup error:', error);
-      if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
+      // Check for HTTP response first (not a network error)
+      if (error.response) {
+        const status = error.response.status;
+        const detail = error.response.data?.detail || error.response.data?.message;
+        throw new Error(detail || `Request failed (HTTP ${status})`);
+      }
+      // True network error (no response)
+      if (error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED' || error.message === 'Network Error') {
         throw new Error('Cannot connect to backend server. Please check that the backend is running and REACT_APP_BACKEND_URL is set correctly.');
       }
       throw error;
@@ -89,11 +100,9 @@ export const AuthProvider = ({ children }) => {
   };
 
   const login = async (email, password) => {
-    if (!API) {
-      throw new Error('Backend URL is not configured. Please set REACT_APP_BACKEND_URL environment variable.');
-    }
     try {
-      const response = await axios.post(`${API}/api/auth/login`, {
+      const url = API_BASE ? `${API_BASE}/api/auth/login` : '/api/auth/login';
+      const response = await axios.post(url, {
         email,
         password
       });
@@ -104,7 +113,14 @@ export const AuthProvider = ({ children }) => {
       return userData;
     } catch (error) {
       console.error('Login error:', error);
-      if (error.code === 'ERR_NETWORK' || error.message.includes('Network Error')) {
+      // Check for HTTP response first (not a network error)
+      if (error.response) {
+        const status = error.response.status;
+        const detail = error.response.data?.detail || error.response.data?.message;
+        throw new Error(detail || `Request failed (HTTP ${status})`);
+      }
+      // True network error (no response)
+      if (error.code === 'ERR_NETWORK' || error.code === 'ECONNREFUSED' || error.message === 'Network Error') {
         throw new Error('Cannot connect to backend server. Please check that the backend is running and REACT_APP_BACKEND_URL is set correctly.');
       }
       throw error;
@@ -112,7 +128,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   const googleLogin = async (code, redirectUri) => {
-    const response = await axios.post(`${API}/api/auth/google`, {
+    const url = API_BASE ? `${API_BASE}/api/auth/google` : '/api/auth/google';
+    const response = await axios.post(url, {
       code,
       redirect_uri: redirectUri
     });
@@ -124,7 +141,8 @@ export const AuthProvider = ({ children }) => {
   };
 
   const getGoogleAuthUrl = async (redirectUri) => {
-    const response = await axios.get(`${API}/api/auth/google/url`, {
+    const url = API_BASE ? `${API_BASE}/api/auth/google/url` : '/api/auth/google/url';
+    const response = await axios.get(url, {
       params: { redirect_uri: redirectUri }
     });
     return response.data.url;

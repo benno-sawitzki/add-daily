@@ -45,9 +45,6 @@ import { Lightbulb } from "lucide-react";
 import {
   DndContext,
   closestCorners,
-  PointerSensor,
-  useSensor,
-  useSensors,
   DragOverlay,
 } from "@dnd-kit/core";
 import {
@@ -59,6 +56,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import axios from "axios";
 import { toast } from "sonner";
+import { usePremiumSensors, premiumDropAnimation, dragOverlayStyles } from "@/utils/dndConfig";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -99,6 +97,7 @@ function SortableQueueItem({
     attributes,
     listeners,
     setNodeRef,
+    setActivatorNodeRef,
     transform,
     transition,
     isDragging: isSortableDragging,
@@ -110,7 +109,7 @@ function SortableQueueItem({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isSortableDragging ? 0.5 : 1,
+    opacity: isSortableDragging ? 0.4 : 1,
   };
 
   const priorityColor = PRIORITY_COLORS[task.priority] || PRIORITY_COLORS[2];
@@ -136,12 +135,16 @@ function SortableQueueItem({
   return (
     <div ref={setNodeRef} style={style} className="mb-3">
       <Card
+        ref={setNodeRef}
         {...attributes}
-        {...listeners}
-        className={`task-card group p-4 border-l-4 ${borderColor} bg-card/50 hover:bg-card transition-all cursor-grab active:cursor-grabbing ${
+        className={`task-card group p-4 border-l-4 ${borderColor} bg-card/50 hover:bg-card transition-all ${
           isSortableDragging ? "border-dashed border-primary/50 bg-primary/5" : ""
         }`}
         data-testid={`queue-task-${task.id}`}
+        onClick={(e) => {
+          // Prevent card clicks from interfering with drag
+          if (e.target.closest('[data-drag-handle]')) return;
+        }}
       >
         <div className="flex items-start gap-3">
           {/* Drag handle and move arrows */}
@@ -160,8 +163,15 @@ function SortableQueueItem({
             ) : (
               <div className="h-8 w-8" />
             )}
-            {/* Drag handle - visual only */}
-            <div className="text-muted-foreground hover:text-foreground pt-1 pointer-events-none">
+            {/* Drag handle - attach listeners here for handle-based dragging */}
+            <div
+              ref={setActivatorNodeRef}
+              {...listeners}
+              data-drag-handle
+              className="text-muted-foreground hover:text-foreground pt-1 cursor-grab active:cursor-grabbing"
+              title="Drag to reorder"
+              onClick={(e) => e.stopPropagation()}
+            >
               <GripVertical className="w-5 h-5" />
             </div>
             {/* Move Down Arrow */}
@@ -237,7 +247,7 @@ function SortableQueueItem({
             </div>
             
             {/* Controls: Priority chip + Duration + Date + Routing + Delete */}
-            <div className="flex items-center gap-3 mt-3">
+            <div className="flex items-center gap-2 mt-3">
               {/* Priority Chip */}
               <span className={`text-xs px-2 py-0.5 rounded-full ${priorityColor} text-white`}>
                 {PRIORITY_LABELS[task.priority] || "Medium"}
@@ -248,7 +258,7 @@ function SortableQueueItem({
                 value={String(task.duration || 30)}
                 onValueChange={(value) => handleDurationChange(task.id, value)}
               >
-                <SelectTrigger className="w-24 h-8 flex-shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
+                <SelectTrigger className="w-20 h-8 flex-shrink-0 text-xs" onClick={(e) => e.stopPropagation()}>
                   <Clock className="w-3 h-3 mr-1" />
                   <SelectValue />
                 </SelectTrigger>
@@ -266,7 +276,7 @@ function SortableQueueItem({
               {/* Date */}
               <Popover>
                 <PopoverTrigger asChild onClick={(e) => e.stopPropagation()}>
-                  <Button variant="outline" className="w-28 h-8 flex-shrink-0 text-xs">
+                  <Button variant="outline" className="w-24 h-8 flex-shrink-0 text-xs">
                     <CalendarIcon className="w-3 h-3 mr-1" />
                     {task.scheduled_date ? format(parseISO(task.scheduled_date), "MMM d") : "No date"}
                   </Button>
@@ -307,7 +317,7 @@ function SortableQueueItem({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto"
+                className="h-8 w-8 flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto mr-4"
                 onClick={(e) => {
                   e.stopPropagation();
                   handleDelete(task.id);
@@ -344,11 +354,39 @@ export default function TaskQueue({
   const [isReordering, setIsReordering] = useState(false);
 
   // Update local tasks when props change (but not during reordering)
+  // Only reconcile if server order differs AND we can do it without visible jumping
   useEffect(() => {
     if (!isReordering) {
-      setLocalTasks(tasks);
+      // Check if the order actually changed to avoid unnecessary updates
+      const currentIds = localTasks.map(t => t.id).join(',');
+      const newIds = tasks.map(t => t.id).join(',');
+      
+      // Only update if IDs differ (new tasks added/removed) or if order changed significantly
+      if (currentIds !== newIds) {
+        // Check if it's just a reorder of the same tasks (avoid double-apply)
+        const currentIdSet = new Set(localTasks.map(t => t.id));
+        const newIdSet = new Set(tasks.map(t => t.id));
+        const idsMatch = currentIdSet.size === newIdSet.size && 
+                        [...currentIdSet].every(id => newIdSet.has(id));
+        
+        if (idsMatch) {
+          // Same tasks, just reordered - only update if priorities changed
+          // This prevents double-apply of reorder
+          const prioritiesChanged = localTasks.some((task, idx) => {
+            const newTask = tasks.find(t => t.id === task.id);
+            return newTask && newTask.priority !== task.priority;
+          });
+          
+          if (prioritiesChanged) {
+            setLocalTasks(tasks);
+          }
+        } else {
+          // Different tasks (added/removed) - always update
+          setLocalTasks(tasks);
+        }
+      }
     }
-  }, [tasks, isReordering]);
+  }, [tasks, isReordering, localTasks]);
 
   // Diagnostic logging
   useEffect(() => {
@@ -500,17 +538,11 @@ export default function TaskQueue({
     }
   };
 
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: {
-        distance: 6,
-      },
-    })
-  );
+  const sensors = usePremiumSensors();
 
-  // Helper function to reorder tasks and update priorities
+  // Helper function to reorder tasks and update priorities with optimistic updates
   // For queued tasks (not yet in database), we just update local state
-  const reorderTasksAndUpdatePriorities = async (newTasks) => {
+  const reorderTasksAndUpdatePriorities = (newTasks) => {
     // Prevent useEffect from resetting local state during reorder
     setIsReordering(true);
     
@@ -539,7 +571,7 @@ export default function TaskQueue({
       };
     });
 
-    // Update local state with new order and priorities
+    // OPTIMISTIC UPDATE: Update local state immediately
     setLocalTasks(tasksWithUpdatedPriorities);
     
     // For queued tasks (not yet in database), we just update local state via onReorder
@@ -550,20 +582,20 @@ export default function TaskQueue({
     setIsReordering(false);
   };
 
-  const handleMoveUp = async (taskId) => {
+  const handleMoveUp = (taskId) => {
     const currentIndex = localTasks.findIndex((t) => String(t.id) === String(taskId));
     if (currentIndex <= 0) return; // Already at top or not found
 
     const newTasks = arrayMove(localTasks, currentIndex, currentIndex - 1);
-    await reorderTasksAndUpdatePriorities(newTasks);
+    reorderTasksAndUpdatePriorities(newTasks);
   };
 
-  const handleMoveDown = async (taskId) => {
+  const handleMoveDown = (taskId) => {
     const currentIndex = localTasks.findIndex((t) => String(t.id) === String(taskId));
     if (currentIndex < 0 || currentIndex >= localTasks.length - 1) return; // Already at bottom or not found
 
     const newTasks = arrayMove(localTasks, currentIndex, currentIndex + 1);
-    await reorderTasksAndUpdatePriorities(newTasks);
+    reorderTasksAndUpdatePriorities(newTasks);
   };
 
   const handleDragStart = (event) => {
@@ -593,15 +625,21 @@ export default function TaskQueue({
         newIndex = 0;
       } else {
         // Dropped on another task
-        newIndex = localTasks.findIndex((t) => String(t.id) === overId);
-        if (newIndex === -1) {
+        const overIndex = localTasks.findIndex((t) => String(t.id) === overId);
+        if (overIndex === -1) {
           console.warn(`Could not find target task with id: ${overId}`);
           return;
         }
+        
+        // Correct index calculation for arrayMove
+        // arrayMove(array, fromIndex, toIndex) removes item at fromIndex, then inserts at toIndex
+        // The overIndex from dnd-kit is already the correct final position we want
+        // Use overIndex directly (no adjustment needed)
+        newIndex = overIndex;
       }
 
       // Only proceed if we have a valid new position
-      if (oldIndex !== newIndex && newIndex !== -1) {
+      if (oldIndex !== newIndex && newIndex >= 0 && newIndex <= localTasks.length) {
         const newTasks = arrayMove(localTasks, oldIndex, newIndex);
         reorderTasksAndUpdatePriorities(newTasks);
       }
@@ -671,7 +709,7 @@ export default function TaskQueue({
             <div>
               <h2 className="text-2xl font-semibold">Review Your Tasks</h2>
               <p className="text-sm text-muted-foreground mt-1">
-                Drag to reorder, adjust durations, then push to calendar
+                Drag to reorder, adjust durations, then push to Next Today or calendar
               </p>
             </div>
             <Button variant="ghost" size="icon" onClick={onClose}>
@@ -822,10 +860,10 @@ export default function TaskQueue({
         </div>
       </div>
 
-      {/* Drag Overlay */}
-      <DragOverlay>
+      {/* Drag Overlay with premium styling */}
+      <DragOverlay dropAnimation={premiumDropAnimation}>
         {activeTask ? (
-          <div className="opacity-90">
+          <div style={dragOverlayStyles}>
             <SortableQueueItem
               task={activeTask}
               index={localTasks.findIndex((t) => String(t.id) === String(activeId))}

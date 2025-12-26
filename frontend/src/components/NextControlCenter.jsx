@@ -2,14 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,13 +12,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipProvider,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
-import { Sparkles, Lightbulb, HelpCircle } from "lucide-react";
+import { Sparkles, Lightbulb } from "lucide-react";
 import TimerSession from "./TimerSession";
 import NextTaskCard from "./NextTaskCard";
 import MicroConfetti from "./MicroConfetti.tsx";
@@ -37,8 +23,6 @@ import {
   clearHyperfocusSession,
 } from "@/utils/hyperfocusStorage";
 import {
-  getFocusStats,
-  initFocusStatsForToday,
   incrementFocusStats,
 } from "@/lib/focusStats.ts";
 import axios from "axios";
@@ -66,10 +50,10 @@ export default function NextControlCenter({
   const [hyperfocusSession, setHyperfocusSession] = useState(null);
   const [suggestedNextId, setSuggestedNextId] = useState(null);
   const [showResumeWarning, setShowResumeWarning] = useState(false);
-  const [focusStats, setFocusStats] = useState(() => initFocusStatsForToday());
   const [confettiKey, setConfettiKey] = useState(0);
   const [confettiPosition, setConfettiPosition] = useState({ x: 0, y: 0 });
   const [showCompletionMessage, setShowCompletionMessage] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const doneButtonRef = useRef(null);
 
   // Load hyperfocus session from localStorage on mount
@@ -84,13 +68,8 @@ export default function NextControlCenter({
     }
   }, [task?.id]);
 
-  // Initialize focus stats on mount and when day changes
-  useEffect(() => {
-    const stats = initFocusStatsForToday();
-    setFocusStats(stats);
-  }, []);
 
-  // Calculate suggested next task
+  // Calculate suggested next task (uses energy level to match task effort)
   useEffect(() => {
     if (inboxTasks && inboxTasks.length > 0) {
       const suggested = pickSuggestedNext(inboxTasks, currentEnergy);
@@ -111,6 +90,7 @@ export default function NextControlCenter({
       remainingSeconds: durationSeconds,
       endsAt: Date.now() + durationSeconds * 1000,
       remainingMs: durationSeconds * 1000, // backward compatibility
+      startedAt: new Date().toISOString(), // Track when session started
     };
     setHyperfocusSession(session);
     saveHyperfocusSession(session);
@@ -130,6 +110,7 @@ export default function NextControlCenter({
       modeMinutes: focusMinutes, // backward compatibility
       endsAt: Date.now() + durationSeconds * 1000,
       remainingMs: durationSeconds * 1000, // backward compatibility
+      startedAt: new Date().toISOString(), // Track when session started
     };
     setHyperfocusSession(session);
     saveHyperfocusSession(session);
@@ -149,6 +130,7 @@ export default function NextControlCenter({
       modeMinutes: durationMinutes, // backward compatibility
       endsAt: Date.now() + durationSeconds * 1000,
       remainingMs: durationSeconds * 1000, // backward compatibility
+      startedAt: new Date().toISOString(), // Track when session started
     };
     setHyperfocusSession(session);
     saveHyperfocusSession(session);
@@ -228,7 +210,34 @@ export default function NextControlCenter({
     setShowResumeWarning(false);
   };
 
-  const handleCompleteHyperfocus = () => {
+  const handleCompleteHyperfocus = async () => {
+    // Save focus session to database before clearing (only for focus mode, not starter)
+    if (hyperfocusSession && hyperfocusSession.status === 'running' && hyperfocusSession.mode === 'focus') {
+      try {
+        // Calculate actual start time (use stored startedAt or estimate from duration)
+        const now = Date.now();
+        const durationMs = (hyperfocusSession.durationSeconds || 1800) * 1000;
+        const startedAt = hyperfocusSession.startedAt 
+          ? new Date(hyperfocusSession.startedAt).toISOString()
+          : new Date(now - durationMs).toISOString();
+        const endedAt = new Date().toISOString();
+        
+        // Calculate actual duration in minutes (may differ if user paused/resumed)
+        const actualDurationMs = new Date(endedAt).getTime() - new Date(startedAt).getTime();
+        const durationMinutes = Math.max(1, Math.floor(actualDurationMs / 60000));
+        
+        const formData = new FormData();
+        formData.append('started_at', startedAt);
+        formData.append('ended_at', endedAt);
+        formData.append('duration_minutes', durationMinutes.toString());
+        
+        await axios.post(`${API}/focus-sessions`, formData);
+      } catch (error) {
+        console.error("Error saving focus session:", error);
+        // Don't block completion if save fails
+      }
+    }
+    
     // Clear session (status becomes 'idle' by clearing)
     setHyperfocusSession(null);
     clearHyperfocusSession();
@@ -276,9 +285,8 @@ export default function NextControlCenter({
       setConfettiKey(prev => prev + 1);
     });
 
-    // Update focus stats
-    const updatedStats = incrementFocusStats();
-    setFocusStats(updatedStats);
+    // Update focus stats (for Command Center metrics)
+    incrementFocusStats();
 
     // Show completion message
     setShowCompletionMessage(true);
@@ -312,7 +320,7 @@ export default function NextControlCenter({
     } catch (error) {
       // If inbox is full, createTask will show the modal, but we still want to inform the user
       if (error.message === "INBOX_FULL") {
-        toast.error("Inbox is full (7 tasks max). Choose what to do with this task.");
+        toast.error("Inbox is full (5 tasks max). Choose what to do with this task.");
       } else {
         console.error("Error creating distraction task:", error);
         toast.error("Failed to add distraction to inbox");
@@ -338,86 +346,19 @@ export default function NextControlCenter({
     }
   };
 
+
   // Single source of truth: focus is active if session exists, matches current task, and status is not 'idle'
   const focus = hyperfocusSession;
   const focusActive = focus && focus.nextTaskId === task?.id && focus.status !== 'idle';
 
   return (
-    <div className="flex flex-col">
-      {/* Header with Energy Selector and Suggested Next - wrapped to match Inbox header height */}
-      <div className="mb-4 relative">
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-3">
-            <h2 className="text-2xl font-semibold">Next</h2>
-            {/* Focus Count Badge */}
-            {focusStats.todayCount > 0 && (
-              <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/20">
-                Focus {focusStats.todayCount}
-              </Badge>
-            )}
-            {/* Streak Badge */}
-            {focusStats.streak > 0 && (
-              <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-500 border-amber-500/20">
-                Streak {focusStats.streak}
-              </Badge>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Energy Selector */}
-            <Select value={currentEnergy || "medium"} onValueChange={onEnergyChange}>
-              <SelectTrigger className="w-48 h-8 text-sm">
-                <SelectValue>
-                  ⚡ Energy now: {currentEnergy === "low" ? "Low" : currentEnergy === "medium" ? "Medium" : "High"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="low">⚡ Low</SelectItem>
-                <SelectItem value="medium">⚡⚡ Medium</SelectItem>
-                <SelectItem value="high">⚡⚡⚡ High</SelectItem>
-              </SelectContent>
-            </Select>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" className="inline-flex items-center p-0 border-0 bg-transparent cursor-help">
-                    <HelpCircle className="w-4 h-4 text-muted-foreground" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>Used for suggestions and filtering based on your current energy.</p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            {/* Suggested Next Button */}
-            {(!task || suggestedNextId) && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleSuggestedNext}
-                className="gap-2 h-8"
-                title="Set suggested next task"
-              >
-                <Lightbulb className="w-3.5 h-3.5" />
-                {task ? null : "Suggested"}
-              </Button>
-            )}
-          </div>
+    <div className="flex flex-col relative">
+      {/* Micro Confetti - positioned near Done button */}
+      {confettiKey > 0 && (
+        <div className="absolute inset-0 pointer-events-none z-[100] overflow-visible">
+          <MicroConfetti triggerKey={confettiKey} position={confettiPosition} />
         </div>
-        <p className="text-sm text-muted-foreground">
-          {showCompletionMessage ? (
-            <span className="text-primary animate-pulse">Next cleared. Pick the next one.</span>
-          ) : (
-            "Your priority task for right now"
-          )}
-        </p>
-        {/* Micro Confetti - positioned near Done button */}
-        {confettiKey > 0 && (
-          <div className="absolute inset-0 pointer-events-none z-[100] overflow-visible">
-            <MicroConfetti triggerKey={confettiKey} position={confettiPosition} />
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Task Display or Empty State */}
       {task ? (
@@ -502,6 +443,7 @@ export default function NextControlCenter({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
     </div>
   );
 }

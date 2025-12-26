@@ -62,14 +62,14 @@ export default function CarryoverModal({
 
   const handleApply = () => {
     const keepTasks = [];
-    const moveToLater = [];
+    const moveToRemove = [];
 
     // Separate selected and unselected tasks
     if (nextTask) {
       if (selectedTasks.has(`next-${nextTask.id}`)) {
         keepTasks.push({ ...nextTask, type: 'next' });
       } else {
-        moveToLater.push({ ...nextTask, type: 'next' });
+        moveToRemove.push({ ...nextTask, type: 'next' });
       }
     }
 
@@ -77,12 +77,12 @@ export default function CarryoverModal({
       if (selectedTasks.has(`inbox-${task.id}`)) {
         keepTasks.push({ ...task, type: 'inbox' });
       } else {
-        moveToLater.push({ ...task, type: 'inbox' });
+        moveToRemove.push({ ...task, type: 'inbox' });
       }
     });
 
     if (onKeepSelected) {
-      onKeepSelected({ keepTasks, moveToLater });
+      onKeepSelected({ keepTasks, moveToRemove });
     }
     onOpenChange(false);
   };
@@ -103,7 +103,7 @@ export default function CarryoverModal({
             Carryover check
           </DialogTitle>
           <DialogDescription>
-            Keep these tasks for tomorrow? The rest will be moved to Later.
+            Keep these tasks for tomorrow? Unselected tasks will be removed from Next Today.
           </DialogDescription>
         </DialogHeader>
 

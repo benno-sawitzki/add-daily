@@ -97,11 +97,32 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
       importance,
       priority,
       energy_required: formData.energy_required,
-      scheduled_date: formData.scheduled_date,
-      scheduled_time: formData.scheduled_time,
+      scheduled_date: formData.scheduled_date || null,
+      scheduled_time: formData.scheduled_time || null,
       duration: parseInt(formData.duration),
-      status: formData.scheduled_date ? "scheduled" : "inbox",
     };
+    
+    // Only update status for existing tasks if scheduled_date changed
+    // For new tasks, set status based on whether there's a scheduled_date
+    if (task) {
+      // Existing task: only update status if scheduled_date is being set/cleared
+      const hadDate = task.scheduled_date;
+      const hasDate = formData.scheduled_date;
+      if (hadDate !== hasDate) {
+        // If scheduled_date was cleared, move to inbox (or preserve current status if not scheduled)
+        if (hadDate && !hasDate) {
+          taskData.status = task.status === "scheduled" ? "inbox" : task.status;
+          taskData.scheduled_time = null;
+        } else if (!hadDate && hasDate) {
+          // If scheduled_date was added, move to scheduled
+          taskData.status = "scheduled";
+        }
+      }
+      // Otherwise, don't include status in update - preserve existing status
+    } else {
+      // New task: set status based on scheduled_date
+      taskData.status = formData.scheduled_date ? "scheduled" : "inbox";
+    }
 
     if (task) {
       // Edit existing task
