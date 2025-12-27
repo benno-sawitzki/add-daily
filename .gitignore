@@ -64,6 +64,11 @@ chainlit.md
 # Data and databases
 agenthub/agents/youtube/db
 
+# Test fixtures (may contain personal data)
+backend/tests/fixtures/dumps_raw.json
+backend/tests/fixtures/dumps_golden.json
+backend/tests/fixtures/llm_responses/
+
 # Archive files and large assets
 **/*.zip
 **/*.tar.gz

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,9 +29,28 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
   const [editingTask, setEditingTask] = useState(null);
   const [draggedIndex, setDraggedIndex] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
+
+  // Update editingTask when the task in tasks array changes (e.g., after update)
+  useEffect(() => {
+    if (editingTask && editingTask.id) {
+      const updatedTask = tasks.find(t => t.id === editingTask.id);
+      if (updatedTask) {
+        setEditingTask(updatedTask);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks]);
   
-  // Sort tasks by priority initially
-  const sortedTasks = [...tasks].sort((a, b) => b.priority - a.priority);
+  // Sort tasks by priority - calculate from urgency + importance for accurate sorting
+  const sortedTasks = [...tasks].sort((a, b) => {
+    const priorityA = a.urgency && a.importance 
+      ? Math.round((parseInt(a.urgency) + parseInt(a.importance)) / 2)
+      : (a.priority || 2);
+    const priorityB = b.urgency && b.importance 
+      ? Math.round((parseInt(b.urgency) + parseInt(b.importance)) / 2)
+      : (b.priority || 2);
+    return priorityB - priorityA;
+  });
 
   const handleScheduleTask = (taskId, date) => {
     const now = new Date();
@@ -157,7 +176,11 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
         onDragOver={(e) => e.preventDefault()}
       >
         {sortedTasks.map((task, index) => {
-          const priorityConfig = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG[2];
+          // Use stored priority value - don't calculate from urgency/importance to prevent
+          // colors from changing when moving/reordering tasks
+          // Colors will update when task is edited via TaskEditDialog (which updates priority)
+          const displayPriority = task.priority || 2;
+          const priorityConfig = PRIORITY_CONFIG[displayPriority] || PRIORITY_CONFIG[2];
           const PriorityIcon = priorityConfig.icon;
           const isDragging = draggedIndex === index;
           const transform = getTransform(index);
@@ -207,12 +230,6 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
                     <div className="flex items-center gap-3 mt-3">
                       <span className={`text-xs px-2 py-1 rounded-full ${priorityConfig.bg} ${priorityConfig.color}`}>
                         {priorityConfig.label}
-                      </span>
-                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                        <ArrowUp className="w-3 h-3" /> Urgency: {task.urgency}
-                      </span>
-                      <span className="text-xs text-muted-foreground flex items-center gap-1">
-                        <AlertCircle className="w-3 h-3" /> Importance: {task.importance}
                       </span>
                     </div>
                   </div>

@@ -9,6 +9,7 @@ import AuthCallback from "@/components/AuthCallback";
 import DumpsListPage from "@/components/DumpsListPage";
 import DumpDetailPage from "@/components/DumpDetailPage";
 import ProcessingPage from "@/components/ProcessingPage";
+import SettingsPage from "@/components/SettingsPage";
 import { Loader2 } from "lucide-react";
 import axios from "axios";
 import "@/App.css";
@@ -85,8 +86,22 @@ const FocusScreenWrapper = () => {
     try {
       const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
       await axios.patch(`${API}/tasks/${taskId}`, { status: "completed" });
+      
+      // Dispatch event to notify MainApp to refresh metrics
+      // This ensures Command Center updates even when task is completed from FocusScreen
+      window.dispatchEvent(new CustomEvent('task-completed', { 
+        detail: { taskId } 
+      }));
+      
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[FocusScreen] Task completed, dispatched event:', { taskId });
+      }
     } catch (error) {
       console.error("Error completing task:", error);
+      // Still dispatch event even on error, so UI can refresh
+      window.dispatchEvent(new CustomEvent('task-completed', { 
+        detail: { taskId } 
+      }));
     }
   };
 
@@ -168,8 +183,8 @@ function AppRoutes() {
         <Route path="weekly" element={null} />
         <Route path="daily" element={null} />
         <Route path="completed" element={null} />
-        <Route path="logbook" element={null} />
         <Route path="process" element={<ProcessingWrapper />} />
+        <Route path="settings" element={<SettingsPage />} />
         <Route path="dumps" element={<DumpsListWrapper />} />
         <Route path="dumps/:id" element={<DumpDetailWrapper />} />
       </Route>

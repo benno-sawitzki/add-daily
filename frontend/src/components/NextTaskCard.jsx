@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
@@ -56,8 +55,13 @@ export default function NextTaskCard({
 
   const handleDurationChange = (value) => {
     if (value) {
-      setDuration(parseInt(value));
+      const newDuration = parseInt(value);
+      setDuration(newDuration);
     }
+  };
+
+  const handleToggleDuration = () => {
+    setDuration(duration === 30 ? 60 : 30);
   };
 
   const handleHyperfocusToggle = () => {
@@ -104,19 +108,13 @@ export default function NextTaskCard({
                 {energyConfig.label}
               </Badge>
             )}
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <ArrowUp className="w-3 h-3" /> Urgency: {task.urgency}
-            </span>
-            <span className="text-xs text-muted-foreground flex items-center gap-1">
-              <AlertCircle className="w-3 h-3" /> Importance: {task.importance}
-            </span>
           </div>
         </div>
       </div>
 
       {/* Footer Controls */}
-      <div className="border-t border-border/50 pt-4 space-y-3" onClick={(e) => e.stopPropagation()}>
-        {/* Primary Row: Hyperfocus button + Duration toggle */}
+      <div className="border-t border-border/50 pt-4" onClick={(e) => e.stopPropagation()}>
+        {/* Primary Row: Hyperfocus button + Duration toggle + Done + Edit + Back to Inbox */}
         <div className="flex items-center gap-3">
           <Button
             onClick={handleHyperfocusToggle}
@@ -137,35 +135,59 @@ export default function NextTaskCard({
             ) : (
               <>
                 <Play className="w-4 h-4" />
-                Hyperfocus
+                Hyperfokus
               </>
             )}
           </Button>
 
-          {/* Duration Toggle - aligned to right, only show when no timer is running */}
-          {!isHyperfocusRunning && !isHyperfocusPaused && (
-            <ToggleGroup
-              type="single"
-              value={String(duration)}
-              onValueChange={handleDurationChange}
-              className="border rounded-md"
-            >
-              <ToggleGroupItem value="30" aria-label="30 minutes" className="px-3">
-                30m
-              </ToggleGroupItem>
-              <ToggleGroupItem value="60" aria-label="60 minutes" className="px-3">
-                60m
-              </ToggleGroupItem>
-            </ToggleGroup>
-          )}
-        </div>
+          {/* Duration Toggle - only show when no timer is running */}
+          <div className="w-[100px]">
+            {!isHyperfocusRunning && !isHyperfocusPaused && (
+              <button
+                onClick={handleToggleDuration}
+                className="relative inline-flex items-center rounded-lg bg-slate-900/80 border border-primary/30 p-0.5 shadow-lg backdrop-blur-sm cursor-pointer w-full"
+                aria-label={`Toggle duration: ${duration === 30 ? 'Switch to 60 minutes' : 'Switch to 30 minutes'}`}
+              >
+                {/* Glow effect */}
+                <div className="absolute inset-0 rounded-lg bg-primary/20 blur-sm opacity-0 transition-opacity duration-300 hover:opacity-100" />
+                
+                {/* Sliding background indicator */}
+                <div
+                  className="absolute inset-y-0.5 rounded-md bg-gradient-to-r from-primary via-primary/90 to-primary shadow-lg shadow-primary/50 transition-all duration-300 ease-in-out"
+                  style={{
+                    left: duration === 30 ? "0.125rem" : "calc(50% + 0.125rem)",
+                    width: "calc(50% - 0.25rem)",
+                  }}
+                />
+                
+                {/* Toggle labels */}
+                <span
+                  className={`relative z-10 px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 flex-1 text-center ${
+                    duration === 30
+                      ? "text-white"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  30m
+                </span>
+                <span
+                  className={`relative z-10 px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 flex-1 text-center ${
+                    duration === 60
+                      ? "text-white"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  60m
+                </span>
+              </button>
+            )}
+          </div>
 
-        {/* Secondary Actions Row: Done, Edit, Back to Inbox */}
-        <div className="flex items-center gap-2">
+          {/* Done button - same width as toggle */}
           <motion.div
             layout
-            className="flex-1"
             transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="w-[100px]"
           >
             <Button
               ref={doneButtonRef}
@@ -180,7 +202,7 @@ export default function NextTaskCard({
               }}
               variant={isCompleting ? "default" : "outline"}
               size="sm"
-              className="flex-1 gap-2 justify-center min-w-[80px]"
+              className="gap-2 justify-center w-full"
               disabled={isCompleting}
             >
               <AnimatePresence mode="wait" initial={false}>
@@ -211,7 +233,7 @@ export default function NextTaskCard({
             </Button>
           </motion.div>
 
-          {/* Small Actions */}
+          {/* Edit and Back to Inbox buttons */}
           <Button
             onClick={() => onEditTask && onEditTask(task)}
             variant="ghost"

@@ -27,7 +27,7 @@ export default function CommandCenter({
     focusCount: focusTasks.length,
   });
   const [loading, setLoading] = useState(false);
-  const [metricsError, setMetricsError] = useState(null);
+  // Removed metricsError state - errors are logged to console only
 
   // Fetch metrics when range changes or refreshTrigger changes
   useEffect(() => {
@@ -51,30 +51,49 @@ export default function CommandCenter({
         // Fetch done tasks count - don't throw on error
         let doneCount = 0;
         try {
-          // Convert ISO date strings to YYYY-MM-DD format for backend
+          // Send full ISO datetime strings to backend to preserve timezone information
+          // The backend can handle both YYYY-MM-DD and full ISO strings
           const startDate = start.split('T')[0];
           const endDate = end.split('T')[0];
           
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[CommandCenter] Fetching done metrics:', { start: startDate, end: endDate, range });
-          }
+          console.log('[CommandCenter] Fetching done metrics:', { 
+            start: startDate, 
+            end: endDate, 
+            range,
+            startISO: start,
+            endISO: end
+          });
           
+          // Try sending full ISO strings first (backend handles both formats)
           const doneResponse = await apiClient.get('/metrics/done', {
-            params: { start: startDate, end: endDate },
+            params: { start: start, end: end },
           });
           doneCount = doneResponse.data.count || 0;
           
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[CommandCenter] Done metrics response:', { count: doneCount, error: doneResponse.data._error });
+          console.log('[CommandCenter] Done metrics response:', { 
+            count: doneCount, 
+            error: doneResponse.data._error,
+            fullResponse: doneResponse.data,
+            debug: doneResponse.data._debug
+          });
+          
+          // If we have debug info, log it prominently
+          if (doneResponse.data._debug) {
+            console.log('🔍 [CommandCenter] Debug info:', doneResponse.data._debug);
           }
           
-          // Log error if present in response
+          // Log error if present in response (console only, no UI display)
           if (doneResponse.data._error) {
-            console.warn("Metrics done returned error:", doneResponse.data._error);
-            setMetricsError("Metrics tables may need setup");
-          } else {
-            // Clear error on success
-            setMetricsError(null);
+            console.error("❌ [CommandCenter] Metrics done returned error:", doneResponse.data._error);
+            // In development, also log to console with more visibility
+            if (process.env.NODE_ENV === 'development') {
+              console.error("Metrics endpoint error details:", {
+                error: doneResponse.data._error,
+                start: startDate,
+                end: endDate,
+                range
+              });
+            }
           }
         } catch (error) {
           const errorDetails = {
@@ -82,11 +101,17 @@ export default function CommandCenter({
             response: error.response?.data,
             status: error.response?.status,
           };
-          console.warn("Failed to fetch done metrics (non-blocking):", errorDetails);
+          console.error("❌ [CommandCenter] Failed to fetch done metrics:", errorDetails);
           doneCount = 0;
-          // Set error only if it's a schema issue
-          if (errorDetails.message?.includes("table") || errorDetails.message?.includes("column") || errorDetails.message?.includes("does not exist")) {
-            setMetricsError("Metrics setup needed");
+          
+          // In development, log full error details
+          if (process.env.NODE_ENV === 'development') {
+            console.error("Full error details:", {
+              error: errorDetails,
+              start: start.split('T')[0],
+              end: end.split('T')[0],
+              range
+            });
           }
         }
         
@@ -104,10 +129,9 @@ export default function CommandCenter({
           focusCount = focusResponse.data.count || 0;
           deepWorkMinutes = focusResponse.data.totalMinutes || 0;
           
-          // Log error if present in response
+          // Log error if present in response (console only, no UI display)
           if (focusResponse.data._error) {
             console.warn("Metrics focus returned error:", focusResponse.data._error);
-            setMetricsError("Metrics tables may need setup");
           }
         } catch (error) {
           const errorDetails = {
@@ -118,10 +142,6 @@ export default function CommandCenter({
           console.warn("Failed to fetch focus metrics (non-blocking):", errorDetails);
           focusCount = 0;
           deepWorkMinutes = 0;
-          // Set error only if it's a schema issue
-          if (errorDetails.message?.includes("table") || errorDetails.message?.includes("column") || errorDetails.message?.includes("does not exist")) {
-            setMetricsError("Metrics setup needed");
-          }
         }
         
         setMetrics({
@@ -131,11 +151,6 @@ export default function CommandCenter({
           nextTodayCount: nextTasks.length,
           focusCount: focusTasks.length,
         });
-        
-        // Clear error on success
-        if (doneCount === 0 && focusCount === 0 && !metricsError) {
-          setMetricsError(null);
-        }
       } catch (error) {
         // This should never happen, but if it does, log and continue
         console.error("Unexpected error in fetchMetrics:", error);
@@ -181,11 +196,6 @@ export default function CommandCenter({
         <p className="text-sm text-muted-foreground">
           Your productivity metrics
         </p>
-        {metricsError && (
-          <p className="text-xs text-muted-foreground/60 mt-1">
-            {metricsError} — core features still work
-          </p>
-        )}
       </div>
 
       {/* Range Selector */}

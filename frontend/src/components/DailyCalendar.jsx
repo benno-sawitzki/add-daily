@@ -52,7 +52,7 @@ const PRIORITY_COLORS = {
 };
 
 // Sortable task component for reordering within a time slot
-function SortableTaskInSlot({ task, index, total, resizing, onTaskClick, onComplete, onDelete, onResizeStart, dateStr, onUpdateTask, onHTML5DragStart, onHTML5DragEnd }) {
+function SortableTaskInSlot({ task, index, total, resizing, resizePreviewDuration, onTaskClick, onComplete, onDelete, onResizeStart, dateStr, onUpdateTask, activeId }) {
   const {
     attributes,
     listeners,
@@ -61,70 +61,70 @@ function SortableTaskInSlot({ task, index, total, resizing, onTaskClick, onCompl
     transition,
     isDragging,
   } = useSortable({ 
-    id: task.id,
-    disabled: resizing === task.id,
+    id: String(task.id),
+    disabled: resizing === task.id, // Disable only when resizing this specific task
   });
 
   const priority = Number(task.priority) || 2;
   const clampedPriority = Math.max(1, Math.min(4, priority));
   const priorityStyle = PRIORITY_STYLES[clampedPriority] || PRIORITY_STYLES[2];
-  const duration = task.duration || 30;
+  const isResizingThis = resizing === task.id;
+  const duration = isResizingThis && resizePreviewDuration !== null ? resizePreviewDuration : (task.duration || 30);
   const taskHeight = getTaskHeight(duration);
   const width = `calc((100% - 4px) / ${total})`;
   const left = `calc(2px + (100% - 4px) * ${index} / ${total})`;
 
+  // Calculate end time for display
+  const getEndTimeDisplay = () => {
+    if (!task.scheduled_time) return '';
+    const [hours, mins] = task.scheduled_time.split(':').map(Number);
+    const totalMinutes = hours * 60 + mins + duration;
+    const endHours = Math.floor(totalMinutes / 60);
+    const endMins = totalMinutes % 60;
+    return `${endHours}:${endMins.toString().padStart(2, '0')}`;
+  };
+
+  const formatDuration = (mins) => {
+    if (mins < 60) return `${mins}m`;
+    const hours = Math.floor(mins / 60);
+    const minutes = mins % 60;
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  };
+
+  // Check if this task is currently being dragged
+  const isBeingDragged = activeId === String(task.id);
+  
   const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
+    transform: isBeingDragged 
+      ? 'translateX(-9999px)' // Move off-screen when dragging to prevent blocking indicator
+      : CSS.Transform.toString(transform),
+    transition: isResizingThis ? 'none' : transition, // Disable transition while resizing for smooth preview
+    opacity: isBeingDragged ? 0 : 1, // Completely hide original task when dragging - DragOverlay shows what's being dragged
     height: `${taskHeight}px`,
     top: '2px',
     width: width,
     left: left,
     position: 'absolute',
+    zIndex: isBeingDragged ? 0 : 10, // Lower z-index when dragging so indicator is visible
+    pointerEvents: isBeingDragged ? 'none' : 'auto', // Disable pointer events when hidden
     ...priorityStyle,
   };
 
-  // Handle HTML5 drag start for moving between time slots
-  const handleDragStart = (e) => {
-    if (resizing) {
-      e.preventDefault();
-      return false;
-    }
-    // Don't start HTML5 drag if clicking on resize handle
-    if (e.target.closest('[data-resize-handle]')) {
-      e.preventDefault();
-      return false;
-    }
-    
-    // Stop dnd-kit from handling this drag (we want HTML5 drag for moving between slots)
-    e.stopPropagation();
-    if (e.stopImmediatePropagation) {
-      e.stopImmediatePropagation();
-    }
-    
-    if (onHTML5DragStart) {
-      onHTML5DragStart(e, task);
-    }
-    
-    return true;
-  };
-
-  // We want HTML5 drag for moving between time slots (vertical movement)
-  // dnd-kit listeners are for horizontal reordering within a slot
-  // To avoid conflicts, we'll not spread listeners on the main element
-  // Instead, we'll use HTML5 drag for the main drag functionality
+  const isActivated = isBeingDragged && isDragging;
   
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...attributes}
-      draggable={!resizing}
-      onDragStart={handleDragStart}
-      onDragEnd={onHTML5DragEnd}
-      onClick={(e) => onTaskClick(e, task)}
-      className="group rounded font-medium cursor-grab active:cursor-grabbing z-10 select-none overflow-hidden"
+      {...listeners}
+      onClick={(e) => {
+        // Don't open edit if we just finished resizing or if dragging
+        if (resizing || isDragging) return;
+        onTaskClick(e, task);
+      }}
+      className="group rounded font-medium select-none overflow-visible cursor-grab active:cursor-grabbing hover:ring-2 hover:ring-primary/50 hover:shadow-md transition-all"
+      title="Drag to move to another time slot"
     >
       <div className="p-2 h-full flex flex-col overflow-hidden pointer-events-auto">
         <div className="flex items-center justify-between overflow-hidden">
@@ -157,39 +157,62 @@ function SortableTaskInSlot({ task, index, total, resizing, onTaskClick, onCompl
       >
         <div className="w-12 h-1 rounded-full bg-white/40" />
       </div>
+
+      {/* Resize preview tooltip */}
+      {isResizingThis && resizePreviewDuration !== null && (
+        <div 
+          className="absolute bottom-0 left-1/2 transform -translate-x-1/2 translate-y-full mb-1 px-2 py-1 bg-black/80 text-white text-xs rounded shadow-lg whitespace-nowrap z-50 pointer-events-none"
+          style={{ zIndex: 100 }}
+        >
+          {formatDuration(resizePreviewDuration)}
+          {task.scheduled_time && (
+            <span className="ml-2 text-white/70">
+              {task.scheduled_time.substring(0, 5)} - {getEndTimeDisplay()}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRefreshTasks }) {
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [dropTarget, setDropTarget] = useState(null);
   const [editingTask, setEditingTask] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [viewMode, setViewMode] = useState(() => getCalendarViewMode()); // 'day' or '24h'
   const [activeId, setActiveId] = useState(null);
+  const [overId, setOverId] = useState(null); // Track what we're dragging over for visual feedback
+  const overIdRef = useRef(null); // Use ref to prevent infinite loops from frequent updates
+  const isDraggingRef = useRef(false); // Track if we're currently dragging to prevent useEffect loops
+
+  // Update editingTask when the task in tasks array changes (e.g., after update)
+  useEffect(() => {
+    if (editingTask) {
+      const updatedTask = tasks.find(t => t.id === editingTask.id);
+      if (updatedTask) {
+        setEditingTask(updatedTask);
+      }
+    }
+  }, [tasks, editingTask?.id]);
   const [slotTaskOrders, setSlotTaskOrders] = useState({}); // { timeSlot: [taskId1, taskId2, ...] }
   const [localInboxTasks, setLocalInboxTasks] = useState([]);
   const [isReordering, setIsReordering] = useState(false);
   const timeLineRef = useRef(null);
   const scrollContainerRef = useRef(null);
   const previousOrdersKeyRef = useRef(null); // Track previous orders to prevent unnecessary updates
+  const prevInboxTasksRef = useRef([]); // Track previous inboxTasks to prevent infinite loops
+  const lastProcessedInboxTasksRef = useRef(null); // Track the last inboxTasks array reference we processed
 
   const dateStr = format(currentDate, "yyyy-MM-dd");
 
   // Generate time slots based on view mode (memoized to prevent infinite loops)
   const TIME_SLOTS = useMemo(() => generateTimeSlots(viewMode), [viewMode]);
 
-  // Use shared DnD hook for drag/resize
+  // Use shared DnD hook only for resize functionality
   const {
-    draggingTask,
-    dragPosition,
-    cursorPosition,
     resizing,
-    handleDragStart,
-    handleDragEnd: handleDragEndShared,
-    handleCalendarDragOver: handleDragOverShared,
-    handleCalendarDrop: handleDropShared,
+    resizePreviewDuration,
     handleResizeStart,
   } = useCalendarDnD({
     view: 'daily',
@@ -199,17 +222,97 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     dateStr,
   });
 
-  // Inbox droppable zone component (same as InboxSplitView)
-  function InboxDropzone({ children, className = "" }) {
+  // Calendar slot droppable component for dragging inbox tasks to calendar
+  function CalendarSlotDroppable({ time, dateStr, children, className, style }) {
     const { setNodeRef, isOver } = useDroppable({
-      id: "inbox-dropzone",
+      id: `calendar-slot-${dateStr}-${time}`,
+      data: {
+        type: 'calendar-slot',
+        time,
+        dateStr,
+      },
     });
 
     return (
       <div
         ref={setNodeRef}
-        className={`min-h-[400px] ${className} ${isOver ? "bg-primary/5" : ""}`}
+        className={`${className} relative`}
+        style={style}
       >
+        {/* Drop indicator line - appears above tasks when dragging */}
+        {isOver && (
+          <div
+            className="absolute top-0 left-0 right-0 h-1 bg-primary pointer-events-none"
+            style={{
+              zIndex: 100, // Higher z-index to appear above all tasks
+              boxShadow: '0 0 12px rgba(var(--primary), 0.8), 0 2px 4px rgba(var(--primary), 0.4)',
+            }}
+          />
+        )}
+        {/* Background highlight when dragging over */}
+        {isOver && (
+          <div className="absolute inset-0 bg-primary/10 pointer-events-none" style={{ zIndex: 0 }} />
+        )}
+        <div className="relative" style={{ zIndex: 10 }}>
+          {children}
+        </div>
+      </div>
+    );
+  }
+
+  // Inbox droppable zone component (same as InboxSplitView)
+  function InboxDropzone({ children, className = "", activeId, dayTasks, overIdRef, localInboxTasks }) {
+    const { setNodeRef, isOver } = useDroppable({
+      id: "inbox-dropzone",
+    });
+    
+    // Check if a calendar task is being dragged over the inbox
+    // A calendar task is one that has scheduled_date and status === "scheduled"
+    const activeTask = activeId ? dayTasks.find((t) => String(t.id) === String(activeId)) : null;
+    const isCalendarTaskDragging = activeTask && activeTask.status === "scheduled" && activeTask.scheduled_date;
+    const showDropFeedback = isOver && isCalendarTaskDragging;
+    
+    // Read from ref instead of state to avoid re-renders
+    const currentOverId = overIdRef?.current || null;
+    
+    // Calculate insertion index for visual feedback
+    let insertionIndex = null;
+    if (isCalendarTaskDragging && currentOverId) {
+      if (currentOverId === "inbox-dropzone") {
+        insertionIndex = 0; // Insert at top
+      } else {
+        const overTaskIndex = localInboxTasks.findIndex((t) => String(t.id) === currentOverId);
+        if (overTaskIndex !== -1) {
+          insertionIndex = overTaskIndex;
+        }
+      }
+    }
+
+    return (
+      <div
+        ref={setNodeRef}
+        className={`min-h-[400px] ${className} transition-all duration-200 relative ${
+          showDropFeedback 
+            ? "ring-4 ring-primary ring-offset-2 ring-offset-background rounded-lg bg-primary/15 border-2 border-primary shadow-lg shadow-primary/20" 
+            : isOver 
+              ? "ring-2 ring-primary/50 ring-offset-2 ring-offset-background rounded-lg bg-primary/5" 
+              : ""
+        }`}
+        style={showDropFeedback ? {
+          animation: 'breathe 3s ease-in-out infinite',
+          transform: 'scale(1.01)',
+        } : {}}
+      >
+        {/* Visual insertion indicator line */}
+        {insertionIndex !== null && (
+          <div
+            className="absolute left-0 right-0 h-0.5 bg-primary z-30 pointer-events-none"
+            style={{
+              top: insertionIndex === 0 ? '0px' : `${insertionIndex * 100}px`, // Approximate task height (100px per task)
+              boxShadow: '0 0 8px rgba(var(--primary), 0.6)',
+            }}
+          />
+        )}
         {children}
       </div>
     );
@@ -327,40 +430,45 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     return tasks.filter((t) => t.status === "inbox");
   }, [tasks]);
 
-  // Update local inbox tasks when props change (but not during reordering)
+  // Update local inbox tasks when props change (but not during reordering or dragging)
   // Only reconcile if server order differs AND we can do it without visible jumping
   useEffect(() => {
-    if (!isReordering) {
-      // Check if the order actually changed to avoid unnecessary updates
-      const currentIds = localInboxTasks.map(t => t.id).join(',');
-      const newIds = inboxTasks.map(t => t.id).join(',');
-      
-      // Only update if IDs differ (new tasks added/removed) or if order changed significantly
-      if (currentIds !== newIds) {
-        // Check if it's just a reorder of the same tasks (avoid double-apply)
-        const currentIdSet = new Set(localInboxTasks.map(t => t.id));
-        const newIdSet = new Set(inboxTasks.map(t => t.id));
-        const idsMatch = currentIdSet.size === newIdSet.size && 
-                        [...currentIdSet].every(id => newIdSet.has(id));
-        
-        if (idsMatch) {
-          // Same tasks, just reordered - only update if priorities changed
-          // This prevents double-apply of reorder
-          const prioritiesChanged = localInboxTasks.some((task, idx) => {
-            const newTask = inboxTasks.find(t => t.id === task.id);
-            return newTask && newTask.priority !== task.priority;
-          });
-          
-          if (prioritiesChanged) {
-            setLocalInboxTasks(inboxTasks);
-          }
-        } else {
-          // Different tasks (added/removed) - always update
-          setLocalInboxTasks(inboxTasks);
-        }
-      }
+    // AGGRESSIVE: Skip if reordering, dragging, or if activeId/overId is set (any drag operation)
+    // Use refs to check drag state to avoid reading state during render
+    if (isReordering || isDraggingRef.current) {
+      return;
     }
-  }, [inboxTasks, isReordering, localInboxTasks]);
+    
+    // Also check state values (but these shouldn't trigger the effect since they're not in deps)
+    // This is a safety check in case the effect runs for other reasons
+    if (activeId || overId) {
+      return;
+    }
+    
+    // Skip if this is the same array reference we already processed
+    if (lastProcessedInboxTasksRef.current === inboxTasks) {
+      return;
+    }
+    
+    // Prevent infinite loops by checking if inboxTasks actually changed
+    // Compare by creating a stable string representation
+    const createTaskKey = (t) => `${t.id}-${t.priority}-${t.urgency}-${t.importance}-${t.energy_required || ''}-${t.duration}-${t.status}-${t.title}`;
+    const prevTasksKey = prevInboxTasksRef.current.map(createTaskKey).join('|');
+    const newTasksKey = inboxTasks.map(createTaskKey).join('|');
+    
+    if (prevTasksKey === newTasksKey) {
+      // No actual changes, but mark as processed to skip future checks
+      lastProcessedInboxTasksRef.current = inboxTasks;
+      return;
+    }
+    
+    // Update refs first to prevent re-triggering
+    prevInboxTasksRef.current = inboxTasks;
+    lastProcessedInboxTasksRef.current = inboxTasks;
+    
+    // Only update local state if tasks actually changed
+    setLocalInboxTasks(inboxTasks);
+  }, [inboxTasks, isReordering]); // Only depend on inboxTasks and isReordering
 
   // Memoize getTasksForSlot to prevent recreation on every render
   const getTasksForSlot = useCallback((time) => {
@@ -378,6 +486,11 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     const total = tasksInSlot.length;
     return { index: index >= 0 ? index : 0, total: total || 1 };
   }, [getTasksForSlot]);
+
+  // Memoize calendar task dragging check to prevent recalculation on every render
+  const isCalendarTaskDragging = useMemo(() => {
+    return activeId && dayTasks.some((t) => String(t.id) === String(activeId));
+  }, [activeId, dayTasks]);
 
   // Calculate current time position
   const getCurrentTimePosition = () => {
@@ -505,7 +618,16 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
   // dnd-kit handler for reordering within time slot or inbox
   const handleDragEnd = async (event) => {
     const { active, over } = event;
-    setActiveId(null);
+    
+    // Reset drag state FIRST using refs to prevent useEffect from running
+    isDraggingRef.current = false;
+    overIdRef.current = null;
+    
+    // Use setTimeout to defer state updates and prevent immediate re-renders
+    setTimeout(() => {
+      setActiveId(null);
+      setOverId(null);
+    }, 0);
 
     if (!over) {
       return;
@@ -513,6 +635,19 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
 
     const activeId = String(active.id);
     const overId = String(over.id);
+
+    // Check if dropping on a calendar slot (from inbox)
+    if (over.data?.current?.type === 'calendar-slot') {
+      const { time, dateStr } = over.data.current;
+      const activeInboxTask = localInboxTasks.find((t) => String(t.id) === activeId);
+      
+      if (activeInboxTask) {
+        // Schedule the task to this calendar slot
+        const payload = buildUpdatePayload(dateStr, time);
+        onUpdateTask(activeId, payload);
+        return;
+      }
+    }
 
     // Check if this is an inbox task being reordered (same logic as InboxSplitView)
     const activeInboxTask = localInboxTasks.find((t) => String(t.id) === activeId);
@@ -550,98 +685,90 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
       return;
     }
 
-    // Find which time slot this task belongs to
-    const activeTask = dayTasks.find((t) => String(t.id) === activeId);
-    if (!activeTask || !activeTask.scheduled_time) return;
-
-    const timeSlot = activeTask.scheduled_time.substring(0, 5); // Get HH:MM
-    const currentOrder = slotTaskOrders[timeSlot] || [];
-    const oldIndex = currentOrder.findIndex((id) => String(id) === activeId);
-    const newIndex = currentOrder.findIndex((id) => String(id) === overId);
-
-    // Only handle reordering if both tasks are in the same slot
-    if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-      // Reorder in state
-      const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
-      setSlotTaskOrders((prev) => ({
-        ...prev,
-        [timeSlot]: newOrder,
-      }));
-
-      // Update tasks via API - adjust scheduled_time slightly to maintain order
-      try {
-        const updates = newOrder.map((taskId, idx) => {
-          const task = dayTasks.find((t) => t.id === taskId);
-          if (!task || !task.scheduled_time) return null;
-          
-          // Extract base time (HH:MM)
-          const baseTime = task.scheduled_time.substring(0, 5);
-          // Add small offset based on position (0.1 minutes per position)
-          const [hours, minutes] = baseTime.split(":").map(Number);
-          const totalMinutes = hours * 60 + minutes + idx * 0.1;
-          const newHours = Math.floor(totalMinutes / 60);
-          const newMins = Math.floor(totalMinutes % 60);
-          const newSecs = Math.floor((totalMinutes % 1) * 60);
-          const newTime = `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}:${String(newSecs).padStart(2, '0')}`;
-          
-          return onUpdateTask(taskId, { scheduled_time: newTime });
+    // Handle calendar task movement (between slots or reordering within slot)
+    const activeCalendarTask = dayTasks.find((t) => String(t.id) === activeId);
+    
+    if (activeCalendarTask) {
+      // Check if dropping calendar task back to inbox
+      // Can drop on inbox-dropzone OR on any inbox task (which means dropping in inbox)
+      const overInboxTask = localInboxTasks.find((t) => String(t.id) === overId);
+      if (overId === "inbox-dropzone" || overInboxTask) {
+        // Move task back to inbox
+        onUpdateTask(activeId, {
+          scheduled_date: null,
+          scheduled_time: null,
+          status: "inbox",
         });
-        await Promise.all(updates.filter(Boolean));
-      } catch (error) {
-        console.error("Error reordering tasks:", error);
-        // Revert on error
-        setSlotTaskOrders((prev) => ({
-          ...prev,
-          [timeSlot]: currentOrder,
-        }));
+        return;
+      }
+      
+      // Check if dropping on a calendar slot (moving to different time)
+      if (over.data?.current?.type === 'calendar-slot') {
+        const { time, dateStr } = over.data.current;
+        const currentTime = activeCalendarTask.scheduled_time?.substring(0, 5);
+        
+        // Only update if moving to a different time slot
+        if (currentTime !== time) {
+          const payload = buildUpdatePayload(dateStr, time);
+          onUpdateTask(activeId, payload);
+        }
+        return;
+      }
+      
+      // Check if reordering within the same slot (dropped on another task in same slot)
+      const overTask = dayTasks.find((t) => String(t.id) === overId);
+      if (overTask && overTask.scheduled_time) {
+        const activeTimeSlot = activeCalendarTask.scheduled_time?.substring(0, 5);
+        const overTimeSlot = overTask.scheduled_time.substring(0, 5);
+        
+        // Same slot - reorder horizontally
+        if (activeTimeSlot === overTimeSlot) {
+          const currentOrder = slotTaskOrders[activeTimeSlot] || dayTasks
+            .filter(t => t.scheduled_time?.substring(0, 5) === activeTimeSlot)
+            .map(t => t.id);
+          
+          const oldIndex = currentOrder.findIndex((id) => String(id) === activeId);
+          const newIndex = currentOrder.findIndex((id) => String(id) === overId);
+          
+          if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+            const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
+            setSlotTaskOrders((prev) => ({
+              ...prev,
+              [activeTimeSlot]: newOrder,
+            }));
+
+            // Update tasks via API - adjust scheduled_time slightly to maintain order
+            try {
+              const updates = newOrder.map((taskId, idx) => {
+                const task = dayTasks.find((t) => t.id === taskId);
+                if (!task || !task.scheduled_time) return null;
+                
+                const baseTime = task.scheduled_time.substring(0, 5);
+                const [hours, minutes] = baseTime.split(":").map(Number);
+                const totalMinutes = hours * 60 + minutes + idx * 0.1;
+                const newHours = Math.floor(totalMinutes / 60);
+                const newMins = Math.floor(totalMinutes % 60);
+                const newSecs = Math.floor((totalMinutes % 1) * 60);
+                const newTime = `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}:${String(newSecs).padStart(2, '0')}`;
+                
+                return onUpdateTask(taskId, { scheduled_time: newTime });
+              });
+              await Promise.all(updates.filter(Boolean));
+            } catch (error) {
+              console.error("Error reordering tasks:", error);
+              setSlotTaskOrders((prev) => ({
+                ...prev,
+                [activeTimeSlot]: currentOrder,
+              }));
+            }
+          }
+          return;
+        }
       }
     }
   };
 
-  // HTML5 drag handlers for moving between time slots (use shared hook)
-  const handleHTML5DragStart = (e, task) => {
-    if (resizing) return;
-    // Don't start drag if clicking on resize handle
-    if (e.target.closest('[data-resize-handle]')) {
-      return;
-    }
-    handleDragStart(e, task);
-    // Prevent text selection during drag
-    e.dataTransfer.setData("text/plain", ""); // Required for Firefox
-  };
 
-  const handleHTML5DragEnd = () => {
-    handleDragEndShared();
-    setDropTarget(null);
-  };
-
-  const handleDragOver = (e, time) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    setDropTarget(time);
-    // Use shared handler but also track drop target for visual feedback
-    if (scrollContainerRef.current) {
-      handleDragOverShared(e, scrollContainerRef);
-    }
-  };
-
-  const handleDragLeave = () => {
-    setDropTarget(null);
-  };
-
-  const handleDrop = (e, time) => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData("taskId");
-    
-    if (taskId && time) {
-      // Use shared buildUpdatePayload to ensure consistent format
-      const payload = buildUpdatePayload(dateStr, time);
-      onUpdateTask(taskId, payload);
-    }
-    
-    handleDragEndShared();
-    setDropTarget(null);
-  };
 
   const handleComplete = (e, taskId) => {
     e.stopPropagation();
@@ -676,9 +803,10 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     onUpdateTask(taskId, { status: "completed" });
   };
 
-  // Get active task for DragOverlay (only show for inbox tasks when dragging within inbox)
+  // Get active task for DragOverlay (inbox or calendar tasks)
   const activeTask = activeId
-    ? localInboxTasks.find((t) => String(t.id) === String(activeId))
+    ? localInboxTasks.find((t) => String(t.id) === String(activeId)) ||
+      dayTasks.find((t) => String(t.id) === String(activeId))
     : null;
 
   return (
@@ -687,9 +815,23 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
       collisionDetection={closestCorners}
       onDragStart={(event) => {
         setActiveId(event.active.id);
+        isDraggingRef.current = true; // Mark that we're dragging
+      }}
+      onDragOver={(event) => {
+        // Track what we're dragging over for visual feedback
+        // ONLY update ref, NOT state - this prevents re-renders that cause infinite loops
+        if (event.over) {
+          overIdRef.current = String(event.over.id);
+          // Don't call setOverId - we'll read from ref in components that need it
+        }
       }}
       onDragEnd={handleDragEnd}
-      onDragCancel={() => setActiveId(null)}
+      onDragCancel={() => {
+        setActiveId(null);
+        overIdRef.current = null;
+        setOverId(null);
+        isDraggingRef.current = false; // Mark that dragging was cancelled
+      }}
     >
     <div className="space-y-4" data-testid="daily-calendar">
       {/* Header */}
@@ -753,7 +895,11 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
           <div className="col-span-12 lg:col-span-7 space-y-4">
       {/* Time Grid */}
       <div className="border border-border/30 rounded-xl overflow-hidden bg-card/20">
-        <div ref={scrollContainerRef} className="max-h-[500px] overflow-y-auto relative">
+        <div 
+          ref={scrollContainerRef} 
+          className="max-h-[500px] overflow-y-auto relative"
+        >
+
           {/* Current time line */}
           {timePosition !== null && (
             <div
@@ -779,8 +925,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
             const isHourMark = time.endsWith(":00");
             const [hours] = time.split(":").map(Number);
             const slotTasks = getTasksForSlot(time);
-            const isDropHere = dropTarget === time;
-                  const taskIds = slotTasks.map((t) => t.id);
+            const taskIds = slotTasks.map((t) => t.id);
 
             return (
               <div
@@ -802,13 +947,10 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
                         items={taskIds}
                         strategy={horizontalListSortingStrategy}
                       >
-                <div
-                  onDragOver={(e) => handleDragOver(e, time)}
-                  onDragLeave={handleDragLeave}
-                  onDrop={(e) => handleDrop(e, time)}
-                  className={`relative border-b border-border/10 p-0.5
-                    ${isDropHere ? "bg-primary/30 ring-2 ring-inset ring-primary" : ""}
-                  `}
+                <CalendarSlotDroppable
+                  time={time}
+                  dateStr={dateStr}
+                  className="relative border-b border-border/10 p-0.5"
                   style={{ height: `${SLOT_HEIGHT}px` }}
                 >
                           {slotTasks.map((task, index) => {
@@ -820,18 +962,18 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
                                 index={index}
                                 total={total}
                                 resizing={resizing}
+                                resizePreviewDuration={resizePreviewDuration}
                                 onTaskClick={handleTaskClick}
                                 onComplete={handleComplete}
                                 onDelete={handleDelete}
                                 onResizeStart={handleResizeStart}
                                 dateStr={dateStr}
                                 onUpdateTask={onUpdateTask}
-                                onHTML5DragStart={handleHTML5DragStart}
-                                onHTML5DragEnd={handleHTML5DragEnd}
+                                activeId={activeId}
                               />
                     );
                   })}
-                </div>
+                </CalendarSlotDroppable>
                       </SortableContext>
               </div>
             );
@@ -877,36 +1019,64 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
               </p>
             </div>
 
-            <InboxDropzone>
+            <InboxDropzone activeId={activeId} dayTasks={dayTasks} overIdRef={overIdRef} localInboxTasks={localInboxTasks}>
               <SortableContext
                 items={localInboxTasks.map((t) => String(t.id))}
                 strategy={verticalListSortingStrategy}
               >
-                {localInboxTasks.length === 0 ? (
-                  <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-lg">
-                    <Inbox className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                    <p>No inbox tasks</p>
-                  </div>
-                ) : (
-                  localInboxTasks.map((task, index) => (
-                    <SortableTaskCard
-                      key={task.id}
-                      task={task}
-                      index={index}
-                      totalTasks={localInboxTasks.length}
-                      onUpdateTask={onUpdateTask}
-                      onDeleteTask={onDeleteTask}
-                      onScheduleTask={handleScheduleTask}
-                      onCompleteTask={handleCompleteTask}
-                      onMakeNext={null}
-                      onMoveToInbox={null}
-                      onMoveUp={handleMoveUp}
-                      onMoveDown={handleMoveDown}
-                      onClick={() => setEditingTask(task)}
-                      enableHTML5Drag={false}
-                    />
-                  ))
-                )}
+                <div className="relative">
+                  {localInboxTasks.length === 0 ? (
+                    <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-lg">
+                      <Inbox className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p>No inbox tasks</p>
+                    </div>
+                  ) : (
+                    <>
+                      {/* Insertion indicator at top when dragging calendar task over dropzone */}
+                      {overIdRef.current === "inbox-dropzone" && isCalendarTaskDragging && (
+                        <div className="absolute top-0 left-0 right-0 h-0.5 bg-primary z-30 pointer-events-none" style={{
+                          boxShadow: '0 0 8px rgba(var(--primary), 0.6)',
+                        }} />
+                      )}
+                      {localInboxTasks.map((task, index) => {
+                        // Check if calendar task is being dragged over this inbox task
+                        // Read from ref to avoid re-renders
+                        const isOverThisTask = overIdRef.current === String(task.id) && isCalendarTaskDragging;
+                        
+                        return (
+                          <div key={task.id} className="relative">
+                            {/* Insertion indicator above this task */}
+                            {isOverThisTask && (
+                              <div className="absolute -top-1 left-0 right-0 h-0.5 bg-primary z-30 pointer-events-none" style={{
+                                boxShadow: '0 0 8px rgba(var(--primary), 0.6)',
+                              }} />
+                            )}
+                            <div style={{
+                              transform: isOverThisTask ? 'translateY(4px)' : 'translateY(0)',
+                              transition: 'transform 0.2s ease',
+                            }}>
+                              <SortableTaskCard
+                                task={task}
+                                index={index}
+                                totalTasks={localInboxTasks.length}
+                                onUpdateTask={onUpdateTask}
+                                onDeleteTask={onDeleteTask}
+                                onScheduleTask={handleScheduleTask}
+                                onCompleteTask={handleCompleteTask}
+                                onMakeNext={null}
+                                onMoveToInbox={null}
+                                onMoveUp={handleMoveUp}
+                                onMoveDown={handleMoveDown}
+                                onClick={() => setEditingTask(task)}
+                                activeId={activeId}
+                              />
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </>
+                  )}
+                </div>
               </SortableContext>
             </InboxDropzone>
           </div>
@@ -925,21 +1095,35 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
         <DragOverlay dropAnimation={premiumDropAnimation}>
           {activeTask ? (
             <div style={dragOverlayStyles}>
-              <SortableTaskCard
-                task={activeTask}
-                index={localInboxTasks.findIndex((t) => String(t.id) === String(activeId))}
-                totalTasks={localInboxTasks.length}
-                onUpdateTask={onUpdateTask}
-                onDeleteTask={onDeleteTask}
-                onScheduleTask={handleScheduleTask}
-                onCompleteTask={handleCompleteTask}
-                onMakeNext={null}
-                onMoveToInbox={null}
-                onMoveUp={handleMoveUp}
-                onMoveDown={handleMoveDown}
-                onClick={() => {}}
-                isDragging={true}
-              />
+              {activeTask.status === "inbox" ? (
+                <SortableTaskCard
+                  task={activeTask}
+                  index={localInboxTasks.findIndex((t) => String(t.id) === String(activeId))}
+                  totalTasks={localInboxTasks.length}
+                  onUpdateTask={onUpdateTask}
+                  onDeleteTask={onDeleteTask}
+                  onScheduleTask={handleScheduleTask}
+                  onCompleteTask={handleCompleteTask}
+                  onMakeNext={null}
+                  onMoveToInbox={null}
+                  onMoveUp={handleMoveUp}
+                  onMoveDown={handleMoveDown}
+                  onClick={() => {}}
+                  isDragging={true}
+                />
+              ) : (
+                // Calendar task overlay - simplified version with translucency
+                <div
+                  className="rounded font-medium p-2 min-w-[200px]"
+                  style={{
+                    ...PRIORITY_STYLES[Number(activeTask.priority) || 2],
+                    height: `${getTaskHeight(activeTask.duration || 30)}px`,
+                    opacity: 0.5, // Make drag overlay translucent so drop indicator is visible behind it
+                  }}
+                >
+                  <span className="text-sm block truncate">{activeTask.title}</span>
+                </div>
+              )}
             </div>
           ) : null}
         </DragOverlay>

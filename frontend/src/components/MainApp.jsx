@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import "@/App.css";
 import { toast } from "sonner";
+import { motion } from "framer-motion";
 import apiClient from "@/lib/apiClient";
 import { handleApiError } from "@/lib/apiErrorHandler";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import SortableNavTabs from "@/components/SortableNavTabs";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,6 +16,13 @@ import {
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "@/components/ui/sheet";
+import {
   Mic,
   Inbox,
   Calendar,
@@ -23,12 +32,12 @@ import {
   LogOut,
   User,
   ChevronDown,
-  Brain,
-  BookOpen,
+  Zap,
   Archive,
+  Settings,
+  Menu,
 } from "lucide-react";
 import InboxSplitView from "@/components/InboxSplitView";
-import Logbook from "@/components/Logbook";
 import WeeklyCalendar from "@/components/WeeklyCalendar";
 import DailyCalendar from "@/components/DailyCalendar";
 import VoiceOverlay from "@/components/VoiceOverlay";
@@ -38,6 +47,8 @@ import InboxFullModal from "@/components/InboxFullModal";
 import CarryoverModal from "@/components/CarryoverModal";
 import CommandCenter from "@/components/CommandCenter";
 import DebugPanel from "@/components/DebugPanel";
+import HyperRecordButton from "@/components/HyperRecordButton";
+import SettingsPage from "@/components/SettingsPage";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 
@@ -59,6 +70,9 @@ function MainApp() {
     if (location.pathname.startsWith('/app/dumps')) {
       return 'dumps';
     }
+    if (location.pathname.startsWith('/app/settings')) {
+      return 'settings';
+    }
     if (location.pathname === '/app' || location.pathname === '/app/inbox') {
       return 'inbox'; // Default to inbox for /app or /app/inbox
     }
@@ -67,7 +81,7 @@ function MainApp() {
     if (pathParts[2]) {
       const view = pathParts[2]; // e.g., /app/weekly -> 'weekly'
       // Only allow valid tab values, default to inbox for unknown routes
-      const validViews = ['inbox', 'weekly', 'daily', 'completed', 'logbook', 'process', 'dumps'];
+      const validViews = ['inbox', 'weekly', 'daily', 'completed', 'process', 'dumps'];
       return validViews.includes(view) ? view : 'inbox';
     }
     return 'inbox';
@@ -79,8 +93,11 @@ function MainApp() {
   useEffect(() => {
     const view = getActiveViewFromRoute();
     setActiveView(view);
+    // Close mobile menu when route changes
+    setMobileMenuOpen(false);
   }, [location.pathname]);
   const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [isBraindumpHovering, setIsBraindumpHovering] = useState(false);
   const [settings, setSettings] = useState({
     ai_provider: "openai",
     ai_model: "gpt-5.2",
@@ -95,6 +112,7 @@ function MainApp() {
   const [showCarryoverModal, setShowCarryoverModal] = useState(false);
   const [currentEnergy, setCurrentEnergy] = useState("medium");
   const [metricsRefreshTrigger, setMetricsRefreshTrigger] = useState(0);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Track last shown error toast to prevent duplicates
   const lastErrorToastRef = useRef({ message: null, timestamp: 0 });
@@ -108,7 +126,19 @@ function MainApp() {
     
     try {
       const response = await apiClient.get('/tasks');
-      setTasks(response.data || []);
+      const fetchedTasks = response.data || [];
+      // Log energy_required in fetched tasks
+      if (fetchedTasks.length > 0) {
+        const sampleTask = fetchedTasks[0];
+        console.log('[MainApp.fetchTasks] Fetched tasks:', {
+          count: fetchedTasks.length,
+          sampleTaskId: sampleTask.id,
+          sampleTaskEnergy: sampleTask.energy_required,
+          hasEnergyInResponse: 'energy_required' in sampleTask,
+          sampleTaskKeys: Object.keys(sampleTask),
+        });
+      }
+      setTasks(fetchedTasks);
       // Clear error state on success
       lastErrorToastRef.current = { message: null, timestamp: 0 };
     } catch (error) {
@@ -200,9 +230,15 @@ function MainApp() {
     }
   }, [user?.id, fetchTasks, fetchSettings, fetchUserPreferences]);
 
-  // Refetch tasks when navigating to inbox or process view (to catch tasks created elsewhere)
+  // Refetch tasks when navigating between views (to catch tasks created/updated elsewhere)
   useEffect(() => {
-    if (user?.id && (location.pathname === '/app' || location.pathname === '/app/inbox' || location.pathname === '/app/process')) {
+    if (user?.id && (
+      location.pathname === '/app' || 
+      location.pathname === '/app/inbox' || 
+      location.pathname === '/app/process' ||
+      location.pathname === '/app/daily' ||
+      location.pathname === '/app/weekly'
+    )) {
       fetchTasks();
     }
   }, [location.pathname, user?.id, fetchTasks]);
@@ -221,6 +257,37 @@ function MainApp() {
     };
   }, [user?.id, fetchTasks]);
 
+  // Listen for task completion events from FocusScreen or other external sources
+  useEffect(() => {
+    const handleTaskCompleted = (event) => {
+      const { taskId } = event.detail || {};
+      if (taskId) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[MainApp] Received task completion event, refreshing metrics:', { taskId });
+        }
+        // Refresh metrics when task is completed externally (e.g., from FocusScreen)
+        setMetricsRefreshTrigger(prev => prev + 1);
+        // Also refetch tasks to ensure UI is in sync
+        if (user?.id) {
+          fetchTasks();
+        }
+      }
+    };
+
+    window.addEventListener('task-completed', handleTaskCompleted);
+    return () => {
+      window.removeEventListener('task-completed', handleTaskCompleted);
+    };
+  }, [user?.id, fetchTasks]);
+
+  /**
+   * Unified task completion function - consolidates all "mark done" actions
+   * Ensures completed_at is set and metrics are refreshed
+   */
+  const completeTask = async (taskId) => {
+    await updateTask(taskId, { status: "completed" });
+  };
+
   /**
    * Unified task update function - used by all views
    * Handles optimistic updates and error recovery
@@ -229,6 +296,23 @@ function MainApp() {
     // Find the task to check if status is actually changing
     const currentTask = tasks.find(t => t.id === taskId);
     const statusChanged = updates.status && currentTask?.status !== updates.status;
+    const isCompleting = updates.status === 'completed';
+    const isUncompleting = currentTask?.status === 'completed' && updates.status && updates.status !== 'completed';
+    
+    // Debug logging
+    console.log('[MainApp.updateTask] Update request:', {
+      taskId,
+      updates,
+      currentTask: currentTask ? {
+        id: currentTask.id,
+        title: currentTask.title,
+        duration: currentTask.duration,
+        urgency: currentTask.urgency,
+        importance: currentTask.importance,
+        energy_required: currentTask.energy_required,
+        priority: currentTask.priority,
+      } : null,
+    });
     
     // Optimistic update: update UI immediately for better UX
     setTasks(prevTasks => 
@@ -239,11 +323,51 @@ function MainApp() {
     
     try {
       const response = await apiClient.patch(`/tasks/${taskId}`, updates);
+      
+      // Debug logging for response
+      console.log('[MainApp.updateTask] API response:', {
+        taskId,
+        responseData: response.data,
+        responseFields: response.data ? Object.keys(response.data) : null,
+        hasDuration: response.data?.duration !== undefined,
+        hasUrgency: response.data?.urgency !== undefined,
+        hasImportance: response.data?.importance !== undefined,
+        hasEnergy: response.data?.energy_required !== undefined,
+      });
+      
       // Update with server response (more accurate, includes computed fields)
+      // Merge with existing task to ensure all fields are preserved, then override with server response
       setTasks(prevTasks => 
-        prevTasks.map(task => 
-          task.id === taskId ? response.data : task
-        )
+        prevTasks.map(task => {
+          if (task.id === taskId) {
+            // Merge existing task with server response to ensure all fields are present
+            // Server response should have all fields, but merging ensures no fields are lost
+            const updatedTask = {
+              ...task,  // Preserve existing fields
+              ...response.data,  // Override with server response (which has all updated fields)
+            };
+            console.log('[MainApp.updateTask] Replacing task in state:', {
+              oldTask: {
+                id: task.id,
+                duration: task.duration,
+                urgency: task.urgency,
+                importance: task.importance,
+                energy_required: task.energy_required,
+                priority: task.priority,
+              },
+              newTask: {
+                id: updatedTask.id,
+                duration: updatedTask.duration,
+                urgency: updatedTask.urgency,
+                importance: updatedTask.importance,
+                energy_required: updatedTask.energy_required,
+                priority: updatedTask.priority,
+              },
+            });
+            return updatedTask;
+          }
+          return task;
+        })
       );
       
       // If status changed (e.g., to/from completed, inbox, next), refetch to ensure badge counts are accurate
@@ -254,8 +378,11 @@ function MainApp() {
       
       // Refresh Command Center metrics if status changed to/from completed
       // This ensures done task count is updated in Command Center
-      // Do this regardless of statusChanged to ensure metrics always refresh
-      if (updates.status === 'completed' || currentTask?.status === 'completed') {
+      // Always refresh when completing or uncompleting tasks
+      if (isCompleting || isUncompleting) {
+        if (process.env.NODE_ENV === 'development') {
+          console.log('[MainApp] Refreshing metrics after task completion change:', { taskId, isCompleting, isUncompleting });
+        }
         setMetricsRefreshTrigger(prev => prev + 1);
       }
       
@@ -349,13 +476,29 @@ function MainApp() {
     setTasks(prevTasks => prevTasks.filter(t => t.id !== taskId));
     
     try {
-      await apiClient.delete(`/tasks/${taskId}`);
+      const deleteUrl = `/tasks/${taskId}`;
+      console.log('[DELETE] Calling delete endpoint:', {
+        url: deleteUrl,
+        taskId,
+        fullUrl: `${apiClient.defaults.baseURL}${deleteUrl}`,
+        baseURL: apiClient.defaults.baseURL
+      });
+      
+      await apiClient.delete(deleteUrl);
+      console.log('[DELETE] Task deleted successfully');
+      
       // Refetch tasks to ensure UI is in sync with server state
       // This ensures badge counts match the actual task list
       await fetchTasks();
     } catch (error) {
-      // Revert optimistic update on error
-      await fetchTasks();
+      // Revert optimistic update on error - restore the deleted task
+      setTasks(prevTasks => {
+        // Only restore if task isn't already there
+        if (!prevTasks.find(t => t.id === taskId)) {
+          return [...prevTasks, deletedTask];
+        }
+        return prevTasks;
+      });
       
       // Enhanced error logging
       const errorDetails = {
@@ -851,80 +994,92 @@ function MainApp() {
     <Tabs value={activeView} onValueChange={setActiveView} className="app-container" data-testid="app-container">
       {/* Header */}
       <header className="border-b border-border/50 bg-card/50 backdrop-blur-xl sticky top-0 z-30" data-testid="app-header">
-        <div className="grid grid-cols-3 items-center px-6 py-4">
-          {/* Left: Logo */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center">
-              <Brain className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold">ADD Daily</h1>
-              <p className="text-sm text-muted-foreground">AI-powered task inbox</p>
-            </div>
+        <div className="flex items-center justify-between px-4 sm:px-6 py-1.5 sm:py-2 gap-2 sm:gap-4">
+          {/* Left: Logo + Mobile Menu Button */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            {/* Mobile Menu Button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden"
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="Open menu"
+            >
+              <Menu className="w-5 h-5" />
+            </Button>
+            
+            {/* Logo + Brand Name (Clickable) */}
+            <button
+              onClick={() => {
+                // Get the first tab's route from localStorage order
+                const tabOrder = JSON.parse(localStorage.getItem("nav-tabs-order") || "[]");
+                const allTabs = [
+                  { id: "inbox", route: "/app/inbox" },
+                  { id: "weekly", route: "/app/weekly" },
+                  { id: "daily", route: "/app/daily" },
+                  { id: "completed", route: "/app/completed" },
+                  { id: "dumps", route: "/app/dumps" },
+                ];
+                
+                // Use first tab from order, or default to inbox
+                const firstTabId = tabOrder.length > 0 ? tabOrder[0] : "inbox";
+                const firstTab = allTabs.find(t => t.id === firstTabId) || allTabs[0];
+                navigate(firstTab.route);
+              }}
+              className="flex items-center gap-3 min-w-0 hover:opacity-80 transition-opacity"
+              aria-label="Go to homepage"
+            >
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center flex-shrink-0">
+                <Zap className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
+              </div>
+              <div className="min-w-0 text-left">
+                <h1 className="text-lg sm:text-xl font-semibold">HyperFokus</h1>
+                <p className="text-xs sm:text-sm text-muted-foreground hidden sm:block">Warp-Speed Productivity.</p>
+              </div>
+            </button>
           </div>
 
-          {/* Center: Navigation Tabs */}
-          <div className="flex justify-center">
-            <TabsList className="bg-card/50 p-1" data-testid="view-tabs">
-              <TabsTrigger value="inbox" className="gap-2" data-testid="tab-inbox" onClick={() => navigate('/app/inbox')}>
-                <Inbox className="w-4 h-4" />
-                Inbox
-                {inboxTasks.length > 0 && (
-                  <span className="ml-1 px-2 py-0.5 text-xs bg-primary/20 text-primary rounded-full">
-                    {inboxTasks.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="weekly" className="gap-2" data-testid="tab-weekly" onClick={() => navigate('/app/weekly')}>
-                <Calendar className="w-4 h-4" />
-                Weekly
-              </TabsTrigger>
-              <TabsTrigger value="daily" className="gap-2" data-testid="tab-daily" onClick={() => navigate('/app/daily')}>
-                <CalendarDays className="w-4 h-4" />
-                Daily
-              </TabsTrigger>
-              <TabsTrigger value="completed" className="gap-2" data-testid="tab-completed" onClick={() => navigate('/app/completed')}>
-                <CheckCircle2 className="w-4 h-4" />
-                Done
-                {completedTasks.length > 0 && (
-                  <span className="ml-1 px-2 py-0.5 text-xs bg-emerald-500/20 text-emerald-500 rounded-full">
-                    {completedTasks.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="dumps" className="gap-2" data-testid="tab-dumps" onClick={() => navigate('/app/dumps')}>
-                <Archive className="w-4 h-4" />
-                Dumps
-              </TabsTrigger>
-              <TabsTrigger value="logbook" className="gap-2" data-testid="tab-logbook" onClick={() => navigate('/app/logbook')}>
-                <BookOpen className="w-4 h-4" />
-                Logbook
-              </TabsTrigger>
-            </TabsList>
+          {/* Center: Navigation Tabs (Desktop only) */}
+          <div className="hidden lg:flex justify-center flex-1 max-w-2xl">
+            <SortableNavTabs
+              activeView={activeView}
+              inboxCount={inboxTasks.length}
+              completedCount={completedTasks.length}
+            />
           </div>
 
           {/* Right: Controls */}
-          <div className="flex items-center gap-4 justify-end">
-            {/* Model Indicator */}
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-muted/50 border border-border/50" data-testid="model-indicator">
+          <div className="flex items-center gap-2 sm:gap-3 lg:gap-4 justify-end flex-shrink-0">
+            {/* Model Indicator (Desktop only) */}
+            <div className="hidden md:flex items-center gap-2 px-2 sm:px-3 py-1.5 rounded-md bg-muted/50 border border-border/50" data-testid="model-indicator">
               <Sparkles className="w-4 h-4 text-[#10A37F]" />
               <span className="text-sm text-[#10A37F] font-medium">GPT 5.2</span>
+            </div>
+
+            {/* Hyper Record Button (Desktop only) */}
+            <div className="hidden md:block">
+              <HyperRecordButton
+                onDumpCreated={() => {
+                  window.dispatchEvent(new CustomEvent('dump-created'));
+                }}
+              />
             </div>
 
             {/* Voice Button */}
             <Button
               onClick={() => setIsVoiceActive(true)}
-              className="gap-2 rounded-full bg-primary hover:bg-primary/90 glow-effect"
+              className="gap-1.5 sm:gap-2 rounded-full bg-primary hover:bg-primary/90 glow-effect relative z-10 px-2 sm:px-4"
               data-testid="voice-button"
+              size="sm"
             >
               <Mic className="w-4 h-4" />
-              Braindump
+              <span className="hidden sm:inline">Braindump</span>
             </Button>
 
             {/* User Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="gap-2 text-muted-foreground hover:text-foreground">
+                <Button variant="ghost" size="icon" className="h-8 w-8 sm:h-auto sm:w-auto sm:gap-2 text-muted-foreground hover:text-foreground">
                   {user?.avatar_url ? (
                     <img src={user.avatar_url} alt="" className="w-6 h-6 rounded-full" />
                   ) : (
@@ -932,8 +1087,8 @@ function MainApp() {
                       <User className="w-3 h-3 text-primary" />
                     </div>
                   )}
-                  <span className="hidden sm:inline max-w-[100px] truncate">{user?.name || user?.email}</span>
-                  <ChevronDown className="w-4 h-4" />
+                  <span className="hidden lg:inline max-w-[100px] truncate ml-2">{user?.name || user?.email}</span>
+                  <ChevronDown className="w-4 h-4 hidden sm:block" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-48">
@@ -943,6 +1098,11 @@ function MainApp() {
                     <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
                   </div>
                 </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => navigate('/app/settings')} className="gap-2">
+                  <Settings className="w-4 h-4" />
+                  Settings
+                </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => { logout(); navigate('/'); }} className="gap-2 text-red-500 focus:text-red-500">
                   <LogOut className="w-4 h-4" />
@@ -954,10 +1114,77 @@ function MainApp() {
         </div>
       </header>
 
+      {/* Mobile Menu Sheet */}
+      <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+        <SheetContent side="left" className="w-[300px] sm:w-[400px] p-0">
+          <SheetHeader className="px-4 sm:px-6 py-4 border-b">
+            <button
+              onClick={() => {
+                // Get the first tab's route from localStorage order
+                const tabOrder = JSON.parse(localStorage.getItem("nav-tabs-order") || "[]");
+                const allTabs = [
+                  { id: "inbox", route: "/app/inbox" },
+                  { id: "weekly", route: "/app/weekly" },
+                  { id: "daily", route: "/app/daily" },
+                  { id: "completed", route: "/app/completed" },
+                  { id: "dumps", route: "/app/dumps" },
+                ];
+                
+                // Use first tab from order, or default to inbox
+                const firstTabId = tabOrder.length > 0 ? tabOrder[0] : "inbox";
+                const firstTab = allTabs.find(t => t.id === firstTabId) || allTabs[0];
+                navigate(firstTab.route);
+                setMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity w-full text-left"
+              aria-label="Go to homepage"
+            >
+              <div className="w-10 h-10 rounded-xl bg-primary/20 flex items-center justify-center flex-shrink-0">
+                <Zap className="w-5 h-5 text-primary" />
+              </div>
+              <div className="text-left">
+                <SheetTitle>HyperFokus</SheetTitle>
+                <SheetDescription>Navigation</SheetDescription>
+              </div>
+            </button>
+          </SheetHeader>
+          
+          <div className="px-4 sm:px-6 py-4">
+            {/* Mobile Navigation */}
+            <SortableNavTabs
+              activeView={activeView}
+              inboxCount={inboxTasks.length}
+              completedCount={completedTasks.length}
+              isMobile={true}
+              onNavigateCallback={() => setMobileMenuOpen(false)}
+            />
+
+            {/* Mobile-specific actions */}
+            <div className="mt-6 pt-6 border-t space-y-3">
+              {/* Model Indicator */}
+              <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-muted/50 border border-border/50">
+                <Sparkles className="w-4 h-4 text-[#10A37F]" />
+                <span className="text-sm text-[#10A37F] font-medium">GPT 5.2</span>
+              </div>
+
+              {/* Hyper Record Button */}
+              <div className="w-full">
+                <HyperRecordButton
+                  onDumpCreated={() => {
+                    window.dispatchEvent(new CustomEvent('dump-created'));
+                    setMobileMenuOpen(false);
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
+
       {/* Main Content */}
       <main className="flex-1 p-6 w-full" data-testid="main-content">
         <TabsContent value="inbox" data-testid="inbox-view">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
             {/* Left: Tasks List (8 columns) */}
             <div className="lg:col-span-8">
               <InboxSplitView
@@ -1003,26 +1230,40 @@ function MainApp() {
           </TabsContent>
 
           <TabsContent value="completed" data-testid="completed-view">
-            <CompletedTasks
-              tasks={completedTasks}
-              onRestoreTask={updateTask}
-              onDeleteTask={deleteTask}
-            />
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
+              {/* Left: Completed Tasks List (8 columns) */}
+              <div className="lg:col-span-8">
+                <CompletedTasks
+                  tasks={completedTasks}
+                  onRestoreTask={updateTask}
+                  onDeleteTask={deleteTask}
+                />
+              </div>
+              {/* Right: Command Center (4 columns) */}
+              <div className="lg:col-span-4">
+                <CommandCenter
+                  nextTasks={nextTasks}
+                  focusTasks={focusTasks}
+                  currentEnergy={currentEnergy}
+                  onEnergyChange={handleEnergyChange}
+                  userId={user?.id}
+                  refreshTrigger={metricsRefreshTrigger}
+                />
+              </div>
+            </div>
           </TabsContent>
 
-            <TabsContent value="logbook" data-testid="logbook-view">
-              <Logbook 
-                userId={user?.id}
-                completedTasks={completedTasks}
-                onRestoreTask={updateTask}
-                onRefreshTasks={fetchTasks}
-                allTasks={tasks}
-              />
-            </TabsContent>
 
             {/* Process route renders directly (no tab trigger) */}
             {activeView === 'process' && (
               <div data-testid="process-view">
+                <Outlet />
+              </div>
+            )}
+
+            {/* Settings route renders directly (no tab trigger) */}
+            {activeView === 'settings' && (
+              <div data-testid="settings-view">
                 <Outlet />
               </div>
             )}

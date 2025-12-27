@@ -1,0 +1,23 @@
+tell cursor to restart both servers:
+
+
+
+
+lsof -ti :8010 | xargs kill -9 2>/dev/null || true
+lsof -ti :3000 | xargs kill -9 2>/dev/null || true
+
+cd ~/Projects/add-daily/backend
+source venv/bin/activate
+python -m uvicorn server:app --reload --host 127.0.0.1 --port 8010
+
+# new terminal
+cd ~/Projects/add-daily/frontend
+npm start
+
+
+
+
+
+running dev.sh starts both servers.
+
+~/Projects/add-daily/dev.sh

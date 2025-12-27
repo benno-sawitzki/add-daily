@@ -36,11 +36,14 @@ const LandingPage = () => {
             {/* Logo */}
             <div className="flex items-center gap-2">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center">
-                <Mic className="w-5 h-5 text-white" />
+                <Zap className="w-5 h-5 text-white" />
               </div>
-              <span className="text-xl font-bold bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
-                ADD Daily
-              </span>
+              <div className="flex flex-col">
+                <span className="text-xl font-bold bg-gradient-to-r from-white to-white/70 bg-clip-text text-transparent">
+                  HyperFokus
+                </span>
+                <span className="text-xs text-white/60 hidden sm:block">Warp-Speed Productivity.</span>
+              </div>
             </div>
 
             {/* Desktop Nav */}
@@ -108,7 +111,7 @@ const LandingPage = () => {
           {/* Subheadline */}
           <p className="text-lg md:text-xl text-white/60 max-w-2xl mx-auto mb-10 animate-fade-in-up delay-100">
             Transform your voice into a perfectly prioritized schedule. 
-            ADD Daily uses AI to understand, prioritize, and calendar your tasks — 
+            HyperFokus uses AI to understand, prioritize, and calendar your tasks — 
             so you can focus on what matters.
           </p>
 
@@ -392,7 +395,7 @@ const LandingPage = () => {
           <div className="grid md:grid-cols-3 gap-6 md:gap-8">
             {[
               {
-                quote: "ADD Daily completely changed how I manage my mornings. I just talk through my day while having coffee, and it's all organized before I finish my cup.",
+                quote: "HyperFokus completely changed how I manage my mornings. I just talk through my day while having coffee, and it's all organized before I finish my cup.",
                 author: "Sarah Chen",
                 role: "Startup Founder",
                 avatar: "SC"
@@ -453,7 +456,7 @@ const LandingPage = () => {
                 a: "We use OpenAI's latest models including GPT-5 for task extraction and Whisper for speech-to-text. You can also choose Claude or other AI providers in the settings."
               },
               {
-                q: "Can I use ADD Daily without voice input?",
+                q: "Can I use HyperFokus without voice input?",
                 a: "Absolutely! While voice is our primary input method, you can also type your tasks directly. The AI will still extract and prioritize them the same way."
               },
               {
@@ -492,7 +495,7 @@ const LandingPage = () => {
               Your Productivity?
             </h2>
             <p className="text-lg text-white/60 mb-8 max-w-xl mx-auto">
-              Join thousands of people who have already simplified their task management with ADD Daily.
+              Join thousands of people who have already simplified their task management with HyperFokus.
             </p>
             <Button 
               size="lg" 
@@ -513,16 +516,16 @@ const LandingPage = () => {
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center">
-                <Mic className="w-4 h-4 text-white" />
+                <Zap className="w-4 h-4 text-white" />
               </div>
-              <span className="font-bold">ADD Daily</span>
+              <span className="font-bold">HyperFokus</span>
             </div>
             <div className="flex items-center gap-6 text-sm text-white/60">
               <a href="#" className="hover:text-white transition-colors">Privacy</a>
               <a href="#" className="hover:text-white transition-colors">Terms</a>
               <a href="#" className="hover:text-white transition-colors">Contact</a>
             </div>
-            <p className="text-sm text-white/40">© 2025 ADD Daily. All rights reserved.</p>
+            <p className="text-sm text-white/40">© 2025 HyperFokus. All rights reserved.</p>
           </div>
         </div>
       </footer>

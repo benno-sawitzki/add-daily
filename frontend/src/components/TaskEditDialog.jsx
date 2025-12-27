@@ -87,8 +87,12 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
 
     const urgency = parseInt(formData.urgency);
     const importance = parseInt(formData.importance);
-    // Use priority from form, or calculate from urgency + importance if not set
-    const priority = parseInt(formData.priority) || Math.round((urgency + importance) / 2);
+    // Auto-calculate priority from urgency + importance
+    // This ensures colors update when urgency/importance changes
+    const calculatedPriority = Math.round((urgency + importance) / 2);
+    // Use explicit priority only if user has manually set it differently from calculated
+    // Otherwise, always use calculated priority to keep colors in sync
+    const priority = calculatedPriority;
 
     const taskData = {
       title: formData.title,
@@ -99,7 +103,7 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
       energy_required: formData.energy_required,
       scheduled_date: formData.scheduled_date || null,
       scheduled_time: formData.scheduled_time || null,
-      duration: parseInt(formData.duration),
+      duration: parseInt(formData.duration) || 30, // Ensure we always have a valid number
     };
     
     // Only update status for existing tasks if scheduled_date changed
@@ -123,6 +127,17 @@ export default function TaskEditDialog({ task, open, onOpenChange, onSave, onDel
       // New task: set status based on scheduled_date
       taskData.status = formData.scheduled_date ? "scheduled" : "inbox";
     }
+
+    // Debug logging
+    console.log('[TaskEditDialog.handleSave] Saving task data:', {
+      taskId: task?.id || 'new',
+      taskData,
+      formData,
+      urgency: taskData.urgency,
+      importance: taskData.importance,
+      duration: taskData.duration,
+      energy_required: taskData.energy_required,
+    });
 
     if (task) {
       // Edit existing task

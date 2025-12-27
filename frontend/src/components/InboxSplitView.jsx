@@ -40,6 +40,18 @@ export default function InboxSplitView({
   const NEXT_TODAY_CAP = 1; // Next Today can only have 1 task max
   const INBOX_CAP = 5; // Inbox can have 5 tasks max
 
+  // Update editingTask when inboxTasks or nextTasks change (e.g., after update)
+  useEffect(() => {
+    if (editingTask && editingTask.id && typeof editingTask === 'object') {
+      // Check both inbox and next tasks
+      const updatedTask = [...inboxTasks, ...nextTasks].find(t => t.id === editingTask.id);
+      if (updatedTask) {
+        setEditingTask(updatedTask);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inboxTasks, nextTasks]);
+
   // Update local state when props change (but not during reordering)
   // Only reconcile if server order differs AND we can do it without visible jumping
   useEffect(() => {
@@ -48,34 +60,50 @@ export default function InboxSplitView({
       const currentIds = localInboxTasks.map(t => t.id).join(',');
       const newIds = inboxTasks.map(t => t.id).join(',');
       
-      // Only update if IDs differ (new tasks added/removed) or if order changed significantly
-      if (currentIds !== newIds) {
+      // Check if any task fields have changed (not just order/IDs)
+      const tasksChanged = localInboxTasks.length !== inboxTasks.length || 
+        localInboxTasks.some((task) => {
+          const newTask = inboxTasks.find(t => t.id === task.id);
+          if (!newTask) return true; // Task removed
+          // Check if any fields changed (compare key fields including energy_required)
+          return JSON.stringify({
+            priority: task.priority,
+            urgency: task.urgency,
+            importance: task.importance,
+            energy_required: task.energy_required,
+            duration: task.duration,
+            status: task.status,
+            title: task.title,
+          }) !== JSON.stringify({
+            priority: newTask.priority,
+            urgency: newTask.urgency,
+            importance: newTask.importance,
+            energy_required: newTask.energy_required,
+            duration: newTask.duration,
+            status: newTask.status,
+            title: newTask.title,
+          });
+        }) || inboxTasks.some((task) => !localInboxTasks.find(t => t.id === task.id)); // New task added
+      
+      // Only update if IDs differ (new tasks added/removed) or if order changed significantly OR if task fields changed
+      if (currentIds !== newIds || tasksChanged) {
         // Check if it's just a reorder of the same tasks (avoid double-apply)
         const currentIdSet = new Set(localInboxTasks.map(t => t.id));
         const newIdSet = new Set(inboxTasks.map(t => t.id));
         const idsMatch = currentIdSet.size === newIdSet.size && 
                         [...currentIdSet].every(id => newIdSet.has(id));
         
-        if (idsMatch) {
-          // Same tasks, just reordered - only update if priorities changed
-          // This prevents double-apply of reorder
-          const prioritiesChanged = localInboxTasks.some((task, idx) => {
-            const newTask = inboxTasks.find(t => t.id === task.id);
-            return newTask && newTask.priority !== task.priority;
-          });
-          
-          if (prioritiesChanged) {
-            setLocalInboxTasks(inboxTasks);
-          }
+        if (idsMatch && !tasksChanged) {
+          // Same tasks, same order, same values - no update needed
         } else {
-          // Different tasks (added/removed) - always update
-      setLocalInboxTasks(inboxTasks);
+          // Tasks added/removed, reordered, or fields changed - always update
+          setLocalInboxTasks(inboxTasks);
         }
       }
       
       setLocalNextTasks(nextTasks);
     }
-  }, [inboxTasks, nextTasks, isReordering, localInboxTasks]);
+  }, [inboxTasks, nextTasks, isReordering]);
 
   const sensors = usePremiumSensors();
   const persistTimeoutRef = useRef(null);
@@ -389,16 +417,68 @@ export default function InboxSplitView({
 
   // Inbox droppable zone
   function InboxDropzone({ children, className = "" }) {
-    const { setNodeRef } = useDroppable({
+    const { setNodeRef, isOver } = useDroppable({
       id: "inbox-dropzone",
     });
 
     return (
       <div
         ref={setNodeRef}
-        className={`min-h-[400px] ${className}`}
+        className={`min-h-[400px] transition-all duration-200 ${
+          isOver ? "ring-2 ring-primary/50 ring-offset-2 ring-offset-background rounded-lg" : ""
+        } ${className}`}
       >
         {children}
+      </div>
+    );
+  }
+
+  // Next Today droppable zone
+  function NextTodayDropzone() {
+    const { setNodeRef, isOver } = useDroppable({
+      id: "next-slot",
+    });
+
+    return (
+      <div
+        ref={setNodeRef}
+        className={`flex-1 space-y-3 min-h-[200px] rounded-lg transition-all duration-200 ${
+          isOver 
+            ? "ring-2 ring-primary ring-offset-2 ring-offset-background bg-primary/10 border-2 border-primary" 
+            : localNextTasks.length === 0 
+              ? "border-2 border-dashed border-border" 
+              : ""
+        }`}
+        style={isOver ? {
+          animation: 'breathe 3s ease-in-out infinite'
+        } : {}}
+      >
+        {localNextTasks.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full min-h-[200px] rounded-lg bg-card/30">
+            <p className="text-sm text-muted-foreground text-center">
+              Drag tasks from Inbox here
+            </p>
+          </div>
+        ) : (
+          localNextTasks.map((task, index) => (
+            <NextSlot
+              key={task.id}
+              task={task}
+              inboxTasks={localInboxTasks}
+              onUpdateTask={onUpdateTask}
+              onDeleteTask={onDeleteTask}
+              onScheduleTask={handleScheduleTask}
+              onCompleteTask={handleCompleteTask}
+              onMoveToInbox={handleMoveToInbox}
+              onEditTask={(task) => setEditingTask(task)}
+              onMakeNext={handleMakeNext}
+              onCreateTask={onCreateTask}
+              onRefreshTasks={onRefreshTasks}
+              currentEnergy={currentEnergy}
+              onEnergyChange={onEnergyChange || (() => {})}
+            />
+          ))
+        )}
       </div>
     );
   }
@@ -495,43 +575,7 @@ export default function InboxSplitView({
             </div>
             
             {/* Next Today Dropzone */}
-            <div
-              ref={(el) => {
-                if (el) {
-                  // Store ref for drag-and-drop
-                  el.setAttribute('data-dropzone', 'next-slot');
-                }
-              }}
-              id="next-slot"
-              className="flex-1 space-y-3 min-h-[200px]"
-            >
-              {localNextTasks.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full min-h-[200px] border-2 border-dashed border-border rounded-lg bg-card/30">
-                  <p className="text-sm text-muted-foreground text-center">
-                    Drag tasks from Inbox here
-                  </p>
-                </div>
-              ) : (
-                localNextTasks.map((task, index) => (
-            <NextSlot
-                    key={task.id}
-                    task={task}
-              inboxTasks={localInboxTasks}
-              onUpdateTask={onUpdateTask}
-              onDeleteTask={onDeleteTask}
-              onScheduleTask={handleScheduleTask}
-              onCompleteTask={handleCompleteTask}
-              onMoveToInbox={handleMoveToInbox}
-              onEditTask={(task) => setEditingTask(task)}
-              onMakeNext={handleMakeNext}
-              onCreateTask={onCreateTask}
-              onRefreshTasks={onRefreshTasks}
-                    currentEnergy={currentEnergy}
-                    onEnergyChange={onEnergyChange || (() => {})}
-            />
-                ))
-              )}
-            </div>
+            <NextTodayDropzone />
           </div>
         </div>
       </div>

@@ -65,6 +65,7 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     timeSlots: TIME_SLOTS,
     viewMode,
     weekDays,
+    dayColumnRefs,
   });
 
   // Wrapper for handleCalendarDragOver that passes calendarRef
@@ -72,17 +73,9 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
     handleDragOverShared(e, calendarRef);
   };
 
-  // Wrapper for handleCalendarDrop that uses buildUpdatePayload
+  // Wrapper for handleCalendarDrop that passes calendarRef
   const handleCalendarDrop = (e) => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData("taskId");
-    
-    if (taskId && dragPosition && dragPosition.date && dragPosition.time) {
-      const payload = buildUpdatePayload(dragPosition.date, dragPosition.time);
-      onUpdateTask(taskId, payload);
-    }
-    
-    handleDragEnd();
+    handleDropShared(e, calendarRef);
   };
 
   // Update current time every 30 seconds (or on minute boundary)
@@ -595,13 +588,15 @@ export default function WeeklyCalendar({ tasks, onUpdateTask, onDeleteTask }) {
                 </div>
 
                 {/* Day Cells */}
-                {weekDays.map((day) => {
+                {weekDays.map((day, dayIdx) => {
                   const dateStr = format(day, "yyyy-MM-dd");
                   const slotTasks = getTasksForSlot(dateStr, time);
 
                   return (
                     <div
                       key={`${dateStr}|${time}`}
+                      data-day-index={dayIdx}
+                      data-date-str={dateStr}
                       ref={(el) => {
                         // Store ref for the first slot of each day (we only need one per day column)
                         if (el && slotIndex === 0) {

@@ -58,82 +58,73 @@ export default function CompletedTasks({ tasks, onRestoreTask, onDeleteTask }) {
       </div>
 
       <div className="space-y-3">
-        {sortedTasks.map((task) => (
-          <Card
-            key={task.id}
-            className="group p-4 bg-card/30 border-border/50 hover:bg-card/50 transition-all"
-            data-testid={`completed-task-${task.id}`}
-          >
-            <div className="flex items-start gap-4">
-              {/* Checkmark */}
-              <div className="flex-shrink-0 w-10 h-10 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
-              </div>
+        {sortedTasks.map((task) => {
+          return (
+            <Card
+              key={task.id}
+              className="task-card group p-4 border-l-4 border-l-emerald-500 bg-card/50 hover:bg-card transition-all opacity-75"
+              data-testid={`completed-task-${task.id}`}
+            >
+              <div className="flex items-start gap-3">
+                {/* Completed indicator - always green */}
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                </div>
 
-              {/* Task content */}
-              <div className="flex-1 min-w-0">
-                <h3 className="font-medium text-foreground/70 line-through">
-                  {task.title}
-                </h3>
-                {task.description && (
-                  <p className="text-sm text-muted-foreground mt-1 line-clamp-1">
-                    {task.description}
-                  </p>
-                )}
-                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                  {task.scheduled_date && (
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3 h-3" />
-                      {format(parseISO(task.scheduled_date), "MMM d")}
+                {/* Task content */}
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-medium text-foreground/70 line-through truncate">
+                    {task.title}
+                  </h3>
+                  {task.description && (
+                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                      {task.description}
+                    </p>
+                  )}
+                  <div className="flex items-center gap-3 mt-3">
+                    <span className="text-xs px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-500">
+                      Completed
                     </span>
-                  )}
-                  {task.scheduled_time && (
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {task.scheduled_time}
-                    </span>
-                  )}
-                  {task.duration && task.duration > 30 && (
-                    <span>{task.duration} min</span>
-                  )}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => handleRestore(task.id)}
+                    data-testid={`restore-inbox-${task.id}`}
+                  >
+                    <Inbox className="w-3.5 h-3.5 mr-1" />
+                    To Inbox
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                    onClick={() => handleRestoreToCalendar(task)}
+                    data-testid={`restore-calendar-${task.id}`}
+                  >
+                    <RotateCcw className="w-3.5 h-3.5 mr-1" />
+                    Reschedule
+                  </Button>
+                  <div className="w-px h-5 bg-border mx-1" />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                    onClick={() => onDeleteTask(task.id)}
+                    data-testid={`delete-completed-${task.id}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
               </div>
-
-              {/* Actions */}
-              <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => handleRestore(task.id)}
-                  data-testid={`restore-inbox-${task.id}`}
-                >
-                  <Inbox className="w-4 h-4" />
-                  To Inbox
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="gap-1 text-muted-foreground hover:text-foreground"
-                  onClick={() => handleRestoreToCalendar(task)}
-                  data-testid={`restore-calendar-${task.id}`}
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Reschedule
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                  onClick={() => onDeleteTask(task.id)}
-                  data-testid={`delete-completed-${task.id}`}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-          </Card>
-        ))}
+            </Card>
+          );
+        })}
       </div>
 
       {/* Clear all button */}

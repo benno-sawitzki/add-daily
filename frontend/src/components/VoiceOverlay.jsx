@@ -7,6 +7,7 @@ import { useNavigate } from "react-router-dom";
 import apiClient from "@/lib/apiClient";
 import { handleApiError } from "@/lib/apiErrorHandler";
 import { toast } from "sonner";
+import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 
 // ============================================
 // VU Meter Ring Component - Dramatic amplitude response
@@ -184,91 +185,43 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
   );
 }
 
-// ============================================
-// Audio Level Hook - Real mic input via Web Audio API
-// ============================================
-function useAudioLevel(stream, isRecording) {
-  const [level, setLevel] = useState(0);
-  const analyserRef = useRef(null);
-  const audioContextRef = useRef(null);
-  const animationRef = useRef(null);
-
-  useEffect(() => {
-    if (!stream || !isRecording) {
-      setLevel(0);
-      return;
-    }
-
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = audioContext.createAnalyser();
-    const source = audioContext.createMediaStreamSource(stream);
-
-    analyser.fftSize = 256;
-    analyser.smoothingTimeConstant = 0.8;
-    source.connect(analyser);
-
-    audioContextRef.current = audioContext;
-    analyserRef.current = analyser;
-
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-    const updateLevel = () => {
-      analyser.getByteTimeDomainData(dataArray);
-
-      // Calculate RMS (root mean square) for accurate loudness
-      let sum = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        const val = (dataArray[i] - 128) / 128;
-        sum += val * val;
-      }
-      const rms = Math.sqrt(sum / dataArray.length);
-      
-      // Map RMS to 0-1 range with some boost for sensitivity
-      const normalizedLevel = Math.min(1, rms * 2.5);
-      setLevel(normalizedLevel);
-
-      animationRef.current = requestAnimationFrame(updateLevel);
-    };
-
-    updateLevel();
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
-      }
-    };
-  }, [stream, isRecording]);
-
-  return level;
-}
+// Note: Audio level calculation is now handled by useAudioRecorder hook
 
 // ============================================
 // Main Voice Overlay Component
 // ============================================
 export default function VoiceOverlay({ onClose }) {
   const navigate = useNavigate();
-  const [isRecording, setIsRecording] = useState(false);
   const [transcript, setTranscript] = useState("");
   const [interimTranscript, setInterimTranscript] = useState("");
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [error, setError] = useState(null);
   const [useTextInput, setUseTextInput] = useState(false);
-  const [recordingTime, setRecordingTime] = useState(0);
   const [useWhisper, setUseWhisper] = useState(false);
-  const [audioStream, setAudioStream] = useState(null);
   const [isSaving, setIsSaving] = useState(false);
   
   const recognitionRef = useRef(null);
-  const mediaRecorderRef = useRef(null);
-  const audioChunksRef = useRef([]);
-  const timerRef = useRef(null);
-  const streamRef = useRef(null);
 
-  // Get real audio level from mic
-  const audioLevel = useAudioLevel(audioStream, isRecording);
+  // Use shared audio recorder hook
+  const {
+    isRecording,
+    recordingTime,
+    error: recorderError,
+    audioLevel,
+    startRecording: startRecorder,
+    stopRecording: stopRecorder,
+    cleanup: cleanupRecorder,
+  } = useAudioRecorder();
+
+  // Sync recorder error with local error state
+  useEffect(() => {
+    if (recorderError) {
+      setError(recorderError);
+      if (recorderError.includes("denied")) {
+        setUseTextInput(true);
+      }
+    }
+  }, [recorderError]);
 
   // Initialize browser speech recognition
   useEffect(() => {
@@ -328,41 +281,17 @@ export default function VoiceOverlay({ onClose }) {
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) {}
     }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-      mediaRecorderRef.current.stop();
-    }
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-    }
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-    }
-    setAudioStream(null);
+    cleanupRecorder();
   };
 
   const startRecording = async () => {
     setError(null);
     setInterimTranscript("");
-    audioChunksRef.current = [];
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      setAudioStream(stream);
+      await startRecorder();
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
-      });
-      
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-      
-      mediaRecorderRef.current = mediaRecorder;
-      mediaRecorder.start(1000);
-
+      // Start browser speech recognition if available
       if (recognitionRef.current && !useWhisper) {
         try {
           recognitionRef.current.start();
@@ -370,80 +299,53 @@ export default function VoiceOverlay({ onClose }) {
           setUseWhisper(true);
         }
       }
-
-      setIsRecording(true);
-      setRecordingTime(0);
-
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
-
     } catch (err) {
-      console.error("Microphone error:", err);
+      // Error already handled by hook, just update UI state
       if (err.name === "NotAllowedError") {
-        setError("Microphone access denied. Please use text input.");
         setUseTextInput(true);
-      } else {
-        setError(`Could not access microphone: ${err.message}`);
       }
     }
   };
 
   const stopRecording = async () => {
-    setIsRecording(false);
-
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) {}
     }
 
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
-      mediaRecorderRef.current.stop();
-      
-      await new Promise(resolve => {
-        mediaRecorderRef.current.onstop = resolve;
-      });
+    // Stop recording via hook and get audio blob
+    const audioBlob = await stopRecorder();
 
-      const currentTranscript = transcript + interimTranscript;
-      if (!currentTranscript.trim() || useWhisper) {
-        await transcribeWithWhisper();
-        // Auto-process after Whisper transcription completes
-        // (handled in transcribeWithWhisper's finally block)
-      } else {
-        // Browser speech recognition: text is already in transcript, don't auto-process
-        // User will click submit button to create dump
+    const currentTranscript = transcript + interimTranscript;
+    if (!currentTranscript.trim() || useWhisper) {
+      // Use Whisper transcription if no browser transcript or if forced to use Whisper
+      if (audioBlob) {
+        await transcribeWithWhisper(audioBlob);
       }
-    }
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
+    } else {
+      // Browser speech recognition: text is already in transcript, don't auto-process
+      // User will click submit button to create dump
     }
     
-    setAudioStream(null);
     setInterimTranscript("");
   };
 
-  const transcribeWithWhisper = async () => {
-    if (audioChunksRef.current.length === 0) return;
+  const transcribeWithWhisper = async (audioBlob) => {
+    if (!audioBlob || audioBlob.size === 0) return;
 
     setIsTranscribing(true);
     setError(null);
 
     try {
-      const mimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
-      const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-      
+      const mimeType = audioBlob.type || 'audio/webm';
       const formData = new FormData();
       const extension = mimeType.includes('webm') ? 'webm' : 'mp4';
       formData.append('audio', audioBlob, `recording.${extension}`);
       
+      // Transcription can take longer for extended recordings (5+ minutes)
+      // Use 5 minutes (300s) timeout to handle long audio files
       const response = await apiClient.post('/transcribe', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 300000, // 5 minutes (300 seconds) for audio transcription
       });
       
       if (response.data.success && response.data.transcript) {
@@ -495,7 +397,7 @@ export default function VoiceOverlay({ onClose }) {
       navigate('/app/process');
     } catch (e) {
       // ALWAYS log the full error structure in dev mode for debugging
-      console.error("Braindump Save Dump Error - Full Error Object:", {
+      console.error("Braindump Process Dump Error - Full Error Object:", {
         error: e,
         response: e.response,
         request: e.request,
@@ -510,7 +412,7 @@ export default function VoiceOverlay({ onClose }) {
       });
       
       // Build user-friendly error message
-      let errorMessage = "Save Dump failed";
+      let errorMessage = "Process Dump failed";
       
       // CRITICAL: Check e.response FIRST - if it exists, it's an HTTP error (not network)
       if (e.response) {
@@ -520,35 +422,35 @@ export default function VoiceOverlay({ onClose }) {
         const detail = responseData?.detail || responseData?.message || '';
         
         if (status === 401) {
-          errorMessage = "Save Dump failed: Unauthorized. Please sign in.";
+          errorMessage = "Process Dump failed: Unauthorized. Please sign in.";
         } else if (status === 400) {
           // Show validation error details
           if (detail) {
-            errorMessage = `Save Dump failed: ${detail}`;
+            errorMessage = `Process Dump failed: ${detail}`;
           } else {
-            errorMessage = "Save Dump failed: Invalid request. Check that all required fields are provided.";
+            errorMessage = "Process Dump failed: Invalid request. Check that all required fields are provided.";
           }
         } else if (detail) {
-          errorMessage = `Save Dump failed: ${detail}`;
+          errorMessage = `Process Dump failed: ${detail}`;
         } else {
-          errorMessage = `Save Dump failed: HTTP ${status}`;
+          errorMessage = `Process Dump failed: HTTP ${status}`;
         }
       } else if (e.request && !e.response) {
         // Request was made but no response received (network/CORS/timeout)
         if (e.code === 'ECONNREFUSED') {
-          errorMessage = "Save Dump failed: Cannot reach backend (connection refused)";
+          errorMessage = "Process Dump failed: Cannot reach backend (connection refused)";
         } else if (e.code === 'ERR_NETWORK' || e.message === 'Network Error') {
-          errorMessage = "Save Dump failed: Cannot reach backend (network error)";
+          errorMessage = "Process Dump failed: Cannot reach backend (network error)";
         } else if (e.code === 'ECONNABORTED') {
-          errorMessage = "Save Dump failed: Request timed out";
+          errorMessage = "Process Dump failed: Request timed out";
         } else if (e.message && e.message.includes('CORS')) {
-          errorMessage = "Save Dump failed: CORS error. Check backend CORS configuration.";
+          errorMessage = "Process Dump failed: CORS error. Check backend CORS configuration.";
         } else {
-          errorMessage = `Save Dump failed: ${e.message || 'Network error'}`;
+          errorMessage = `Process Dump failed: ${e.message || 'Network error'}`;
         }
       } else {
         // No request made (configuration error)
-        errorMessage = `Save Dump failed: ${e.message || 'Unknown error'}`;
+        errorMessage = `Process Dump failed: ${e.message || 'Unknown error'}`;
       }
       
       setError(errorMessage);
@@ -644,7 +546,7 @@ export default function VoiceOverlay({ onClose }) {
         {/* Status text - Always present */}
         <p className="text-lg mb-4 text-center min-h-[28px]">
           {isSaving ? (
-            <span className="text-primary">Saving...</span>
+            <span className="text-primary">Processing...</span>
           ) : isTranscribing ? (
             <span className="text-primary">Transcribing with AI...</span>
           ) : isRecording ? (
@@ -672,10 +574,15 @@ export default function VoiceOverlay({ onClose }) {
             <Button
               variant={useTextInput ? "default" : "outline"}
               size="sm"
-              onClick={() => {
-                cleanup();
+              onClick={async () => {
+                if (isRecording) {
+                  await stopRecorder();
+                  if (recognitionRef.current) {
+                    try { recognitionRef.current.stop(); } catch (e) {}
+                  }
+                }
+                cleanupRecorder();
                 setUseTextInput(true);
-                setIsRecording(false);
               }}
               className="gap-2"
               data-testid="text-mode-btn"
@@ -739,7 +646,7 @@ export default function VoiceOverlay({ onClose }) {
             ) : (
               <Send className="w-4 h-4" />
             )}
-            {isSaving ? 'Saving...' : 'Save Dump'}
+            {isSaving ? 'Processing...' : 'Process Dump'}
           </Button>
         </div>
 

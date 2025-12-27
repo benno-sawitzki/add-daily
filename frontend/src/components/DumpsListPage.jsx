@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Mic, FileText, Loader2, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -15,6 +16,8 @@ export default function DumpsListPage({ userId }) {
   const [hasMore, setHasMore] = useState(true);
   const [offset, setOffset] = useState(0);
   const [deletingId, setDeletingId] = useState(null);
+  const [selectedDumps, setSelectedDumps] = useState(new Set());
+  const [isDeletingSelected, setIsDeletingSelected] = useState(false);
   const limit = 20;
 
   const fetchDumps = async (reset = false) => {
@@ -35,6 +38,7 @@ export default function DumpsListPage({ userId }) {
       
       if (reset) {
         setDumps(fetchedDumps);
+        setSelectedDumps(new Set()); // Clear selection when resetting
       } else {
         setDumps(prev => [...prev, ...fetchedDumps]);
       }
@@ -61,6 +65,19 @@ export default function DumpsListPage({ userId }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
 
+  // Listen for dump-created event to refresh list
+  useEffect(() => {
+    const handleDumpCreated = () => {
+      fetchDumps(true);
+    };
+
+    window.addEventListener('dump-created', handleDumpCreated);
+    return () => {
+      window.removeEventListener('dump-created', handleDumpCreated);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleDumpClick = (dumpId) => {
     navigate(`/app/dumps/${dumpId}`);
   };
@@ -78,6 +95,12 @@ export default function DumpsListPage({ userId }) {
       toast.success("Dump deleted successfully");
       // Remove from local state
       setDumps(prev => prev.filter(dump => dump.id !== dumpId));
+      // Remove from selected if it was selected
+      setSelectedDumps(prev => {
+        const next = new Set(prev);
+        next.delete(dumpId);
+        return next;
+      });
     } catch (error) {
       const errorMessage = handleApiError(error, "Failed to delete dump");
       toast.error(errorMessage);
@@ -85,6 +108,60 @@ export default function DumpsListPage({ userId }) {
       setDeletingId(null);
     }
   };
+
+
+  const handleSelectAll = (checked) => {
+    if (checked) {
+      setSelectedDumps(new Set(dumps.map(dump => dump.id)));
+    } else {
+      setSelectedDumps(new Set());
+    }
+  };
+
+  const handleDeleteSelected = async () => {
+    if (selectedDumps.size === 0) return;
+    
+    if (!window.confirm(`Delete ${selectedDumps.size} dump${selectedDumps.size > 1 ? 's' : ''}?`)) {
+      return;
+    }
+
+    setIsDeletingSelected(true);
+    const selectedIds = Array.from(selectedDumps);
+    let successCount = 0;
+    let errorCount = 0;
+
+    try {
+      // Delete all selected dumps in parallel
+      await Promise.all(
+        selectedIds.map(async (dumpId) => {
+          try {
+            await apiClient.delete(`/dumps/${dumpId}`);
+            successCount++;
+          } catch (error) {
+            console.error(`Failed to delete dump ${dumpId}:`, error);
+            errorCount++;
+          }
+        })
+      );
+
+      // Remove deleted dumps from local state
+      setDumps(prev => prev.filter(dump => !selectedDumps.has(dump.id)));
+      setSelectedDumps(new Set());
+
+      if (errorCount === 0) {
+        toast.success(`Deleted ${successCount} dump${successCount > 1 ? 's' : ''} successfully`);
+      } else {
+        toast.warning(`Deleted ${successCount} dump${successCount > 1 ? 's' : ''}, ${errorCount} failed`);
+      }
+    } catch (error) {
+      toast.error("Error deleting dumps");
+    } finally {
+      setIsDeletingSelected(false);
+    }
+  };
+
+  const isAllSelected = dumps.length > 0 && selectedDumps.size === dumps.length;
+  const isSomeSelected = selectedDumps.size > 0 && selectedDumps.size < dumps.length;
 
   if (loading && dumps.length === 0) {
     return (
@@ -117,6 +194,31 @@ export default function DumpsListPage({ userId }) {
             History of all capture sessions
           </p>
         </div>
+        {selectedDumps.size > 0 && (
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-muted-foreground">
+              {selectedDumps.size} selected
+            </span>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteSelected}
+              disabled={isDeletingSelected}
+            >
+              {isDeletingSelected ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete Selected
+                </>
+              )}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Use same grid layout as inbox view - match inbox column exactly (1/3 width) */}
@@ -127,20 +229,51 @@ export default function DumpsListPage({ userId }) {
           <div className="grid grid-cols-12 gap-6">
             {/* Dumps list (6 columns = 1/3 of total width, matching inbox column) */}
             <div className="col-span-12 lg:col-span-6">
+              {/* Select All checkbox */}
+              {dumps.length > 0 && (
+                <div className="flex items-center gap-2 mb-4 pb-3 border-b">
+                  <Checkbox
+                    checked={isAllSelected}
+                    onCheckedChange={handleSelectAll}
+                    className="h-4 w-4"
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    Select all ({dumps.length} dumps)
+                  </span>
+                </div>
+              )}
               <div className="grid gap-4">
         {dumps.map((dump) => {
+          const isSelected = selectedDumps.has(dump.id);
           const createdAt = new Date(dump.created_at);
           const preview = dump.raw_text.length > 150 
             ? dump.raw_text.substring(0, 150) + '...' 
             : dump.raw_text;
+          const displayTitle = dump.title || preview;
           
           return (
             <Card
               key={dump.id}
-              className="p-4 hover:bg-card/50 transition-colors cursor-pointer"
+              className={`p-4 hover:bg-card/50 transition-colors cursor-pointer ${isSelected ? 'ring-2 ring-primary' : ''}`}
               onClick={() => handleDumpClick(dump.id)}
             >
               <div className="flex items-start justify-between gap-4">
+                <Checkbox
+                  checked={isSelected}
+                  onCheckedChange={() => {
+                    setSelectedDumps(prev => {
+                      const next = new Set(prev);
+                      if (next.has(dump.id)) {
+                        next.delete(dump.id);
+                      } else {
+                        next.add(dump.id);
+                      }
+                      return next;
+                    });
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="h-4 w-4 mt-1 flex-shrink-0"
+                />
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
                     <span className="text-sm font-medium">
@@ -155,8 +288,13 @@ export default function DumpsListPage({ userId }) {
                       <span className="capitalize">{dump.source}</span>
                     </div>
                   </div>
-                  <p className="text-sm text-foreground mb-2 line-clamp-3">
-                    {preview}
+                  {dump.title ? (
+                    <h3 className="text-base font-semibold text-foreground mb-1 line-clamp-1">
+                      {dump.title}
+                    </h3>
+                  ) : null}
+                  <p className={`text-sm ${dump.title ? 'text-muted-foreground' : 'text-foreground'} mb-2 line-clamp-3`}>
+                    {dump.title ? preview : displayTitle}
                   </p>
                 </div>
                 <Button

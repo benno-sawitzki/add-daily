@@ -20,7 +20,7 @@ if (process.env.NODE_ENV === 'development') {
 // Create a centralized axios instance with default configuration
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 10000, // 10 seconds
+  timeout: 60000, // 60 seconds (increased for LLM extraction which can take longer)
   headers: {
     'Content-Type': 'application/json',
   },

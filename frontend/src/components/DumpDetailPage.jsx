@@ -2,11 +2,13 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Loader2, Sparkles, ExternalLink, Trash2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { ArrowLeft, Loader2, Sparkles, ExternalLink, Trash2, Pencil, Check, X } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import apiClient from "@/lib/apiClient";
 import { handleApiError } from "@/lib/apiErrorHandler";
+import DumpItemCard from "./DumpItemCard";
 
 export default function DumpDetailPage({ userId }) {
   const { id } = useParams();
@@ -16,6 +18,8 @@ export default function DumpDetailPage({ userId }) {
   const [loading, setLoading] = useState(true);
   const [extracting, setExtracting] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleValue, setTitleValue] = useState("");
 
   const fetchDump = async () => {
     if (!userId || !id) return;
@@ -38,6 +42,7 @@ export default function DumpDetailPage({ userId }) {
       
       setDump(dumpData);
       setItems(fetchedItems);
+      setTitleValue(dumpData.title || "");
     } catch (error) {
       const errorMessage = handleApiError(error, "Failed to load dump");
       toast.error(errorMessage);
@@ -51,6 +56,25 @@ export default function DumpDetailPage({ userId }) {
     fetchDump();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userId]);
+
+  const handleTitleSave = async () => {
+    if (!id || !dump) return;
+    
+    try {
+      const response = await apiClient.patch(`/dumps/${id}`, { title: titleValue || null });
+      setDump({ ...dump, title: response.data.title });
+      setIsEditingTitle(false);
+      toast.success("Title updated");
+    } catch (error) {
+      const errorMessage = handleApiError(error, "Failed to update title");
+      toast.error(errorMessage);
+    }
+  };
+
+  const handleTitleCancel = () => {
+    setTitleValue(dump?.title || "");
+    setIsEditingTitle(false);
+  };
 
   const handleExtract = async () => {
     if (!id) return;
@@ -117,9 +141,48 @@ export default function DumpDetailPage({ userId }) {
           <ArrowLeft className="w-4 h-4" />
         </Button>
         <div className="flex-1">
-          <h2 className="text-2xl font-semibold">Dump Details</h2>
+          {/* Title - Editable */}
+          {isEditingTitle ? (
+            <div className="flex items-center gap-2 max-w-[33.333%]">
+              <Input
+                value={titleValue}
+                onChange={(e) => setTitleValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleTitleSave();
+                  if (e.key === "Escape") handleTitleCancel();
+                }}
+                placeholder="Enter dump title..."
+                className="text-2xl font-semibold h-auto py-1"
+                autoFocus
+              />
+              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleTitleSave}>
+                <Check className="w-4 h-4 text-emerald-500" />
+              </Button>
+              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleTitleCancel}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          ) : (
+            <div 
+              className="flex items-center gap-2 group cursor-pointer"
+              onClick={() => setIsEditingTitle(true)}
+            >
+              <h2 className="text-2xl font-semibold">
+                {dump.title || "Untitled Dump"}
+              </h2>
+              <Pencil className="w-4 h-4 opacity-0 group-hover:opacity-50 transition-opacity" />
+            </div>
+          )}
           <p className="text-sm text-muted-foreground mt-1">
             {format(new Date(dump.created_at), "MMM d, yyyy 'at' HH:mm")} • {dump.source}
+            {dump.extraction_status && (
+              <span className="ml-2">
+                • Extraction: {dump.extraction_status}
+                {dump.extraction_item_count !== null && dump.extraction_item_count !== undefined && (
+                  <span> ({dump.extraction_item_count} items)</span>
+                )}
+              </span>
+            )}
           </p>
         </div>
         <Button
@@ -199,61 +262,15 @@ export default function DumpDetailPage({ userId }) {
                 </Button>
               </div>
 
-              <div className="space-y-2">
-            {items.map((item, index) => {
-              const status = item.status || 'new';
-              const isPromoted = status === 'promoted';
-              const isDismissed = status === 'dismissed';
-              
-              return (
-                <Card
-                  key={item.id}
-                  className={`p-4 ${
-                    isPromoted 
-                      ? 'bg-emerald-500/10 border-emerald-500/20' 
-                      : isDismissed
-                        ? 'opacity-60 bg-muted/30'
-                        : ''
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-xs text-muted-foreground">
-                          #{index + 1}
-                        </span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          status === 'promoted'
-                            ? 'bg-emerald-500/20 text-emerald-500'
-                            : status === 'dismissed'
-                              ? 'bg-gray-500/20 text-gray-500'
-                              : 'bg-blue-500/20 text-blue-500'
-                        }`}>
-                          {status === 'promoted' ? 'Promoted' : status === 'dismissed' ? 'Dismissed' : 'New'}
-                        </span>
-                        {isPromoted && item.created_task_id && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-6 text-xs"
-                            onClick={() => navigate(`/app/inbox`)}
-                          >
-                            View Task
-                            <ExternalLink className="w-3 h-3 ml-1" />
-                          </Button>
-                        )}
-                      </div>
-                      <p className="text-sm font-medium text-foreground">{item.text || 'Untitled Item'}</p>
-                      {isPromoted && item.created_task_id && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          Task ID: {item.created_task_id}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                </Card>
-              );
-            })}
+              <div className="space-y-3">
+                {items.map((item) => (
+                  <DumpItemCard
+                    key={item.id}
+                    item={item}
+                    onUpdate={fetchDump}
+                    onDelete={fetchDump}
+                  />
+                ))}
               </div>
             </div>
           )}

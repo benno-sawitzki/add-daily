@@ -8,6 +8,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   CheckCircle2,
   Trash2,
   Clock,
@@ -30,9 +37,9 @@ const PRIORITY_CONFIG = {
 };
 
 const ENERGY_CONFIG = {
-  low: { label: "L", color: "bg-slate-500/20 text-slate-300", fullLabel: "Low" },
-  medium: { label: "M", color: "bg-blue-500/20 text-blue-300", fullLabel: "Medium" },
-  high: { label: "H", color: "bg-purple-500/20 text-purple-300", fullLabel: "High" },
+  low: { label: "⚡", color: "bg-slate-500/20 text-slate-300", fullLabel: "Low" },
+  medium: { label: "⚡⚡", color: "bg-blue-500/20 text-blue-300", fullLabel: "Medium" },
+  high: { label: "⚡⚡⚡", color: "bg-purple-500/20 text-purple-300", fullLabel: "High" },
 };
 
 // Activation delay constants - must match activationConstraint in dndConfig.js
@@ -80,6 +87,7 @@ export default function SortableTaskCard({
   const holdStartTimeRef = useRef(null);
   const holdAnimationFrameRef = useRef(null);
   const pointerStartPosRef = useRef({ x: 0, y: 0 });
+  const cardRef = useRef(null);
   const handleRef = useRef(null);
   
   const isActivated = activeId === String(task.id) && isSortableDragging;
@@ -130,13 +138,18 @@ export default function SortableTaskCard({
     }
   };
   
-  // Handle pointer down on drag handle for feedback (using Capture phase to avoid overriding dnd-kit)
+  // Handle pointer down on card for feedback (using Capture phase to avoid overriding dnd-kit)
   // CRITICAL: We use onPointerDownCapture so we observe the event WITHOUT overriding dnd-kit's listeners.
   // dnd-kit's listeners (from {...listeners}) must run normally for drag activation to work.
   // We only observe for visual feedback; we never preventDefault() or stopPropagation().
   const handlePointerDownCapture = (e) => {
     // Only start hold feedback if not already dragging
     if (isActivated || isSortableDragging) return;
+    
+    // Don't start drag feedback if clicking on interactive elements
+    if (e.target.closest('button') || e.target.closest('[role="combobox"]') || e.target.closest('input') || e.target.closest('select')) {
+      return;
+    }
     
     holdStartTimeRef.current = Date.now();
     pointerStartPosRef.current = { x: e.clientX, y: e.clientY };
@@ -200,13 +213,25 @@ export default function SortableTaskCard({
   const PriorityIcon = priorityConfig.icon;
 
   // HTML5 drag handlers for cross-component dragging (e.g., inbox to calendar)
+  // Note: We enable HTML5 drag alongside dnd-kit. dnd-kit handles reordering within the inbox,
+  // while HTML5 drag handles dragging to the calendar. They can coexist because:
+  // - dnd-kit uses pointer events (onPointerDown, etc.)
+  // - HTML5 drag uses drag events (onDragStart, etc.)
+  // However, when HTML5 drag starts, we need to cancel dnd-kit's drag if it's active
   const handleHTML5DragStart = (e) => {
     if (enableHTML5Drag) {
-      // Prevent dnd-kit from handling this drag
-      e.stopPropagation();
-      if (e.stopImmediatePropagation) {
-        e.stopImmediatePropagation();
+      // Don't start HTML5 drag if clicking on interactive elements
+      if (e.target.closest('button') || e.target.closest('[role="combobox"]') || e.target.closest('input') || e.target.closest('select')) {
+        e.preventDefault();
+        return false;
       }
+      
+      // Cancel any active dnd-kit drag (by canceling the hold feedback)
+      cancelHoldFeedback();
+      
+      // Don't prevent dnd-kit from handling the drag - let both work
+      // dnd-kit will handle reordering within the inbox, HTML5 drag will handle calendar drops
+      // We just set up the HTML5 drag data
       e.dataTransfer.effectAllowed = "move";
       e.dataTransfer.setData("taskId", task.id);
       // Create a custom drag image from the card element
@@ -306,9 +331,17 @@ export default function SortableTaskCard({
   return (
     <div style={style} className="mb-3">
       <Card
-        ref={setNodeRef}
+        ref={(node) => {
+          setNodeRef(node);
+          cardRef.current = node;
+          // Set activator node ref to the card itself for drag-from-anywhere
+          setActivatorNodeRef(node);
+        }}
         {...attributes}
-        className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all ${
+        {...listeners}
+        draggable={false}
+        onPointerDownCapture={handlePointerDownCapture}
+        className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all cursor-grab active:cursor-grabbing ${
           isSortableDragging ? "border-dashed border-primary/50 bg-primary/5" : ""
         } ${showPulse && !isActivated ? "hold-pulse" : ""}`}
         data-testid={`task-card-${task.id}`}
@@ -331,84 +364,56 @@ export default function SortableTaskCard({
                 </Button>
               )}
             </div>
-            {/* Drag handle - attach dnd-kit listeners here for handle-based dragging */}
-            {/* CRITICAL: We use onPointerDownCapture (not onPointerDown) to observe events without overriding dnd-kit's listeners.
-                dnd-kit's {...listeners} must run normally for drag activation. Our feedback is purely visual. */}
+            {/* Drag handle icon (visual only - drag now works from entire card) */}
             <div className="relative inline-flex items-center justify-center">
-              {/* Progress ring SVG - pointer-events-none ensures it never blocks interaction */}
-              {isHolding && !isActivated && (
-                <svg
-                  className="absolute inset-0 w-8 h-8 pointer-events-none"
-                  viewBox="0 0 32 32"
-                  style={{ transform: 'translate(-6px, -6px)' }}
-                >
-                  <circle
-                    cx="16"
-                    cy="16"
-                    r="14"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    className="text-primary/20"
-                  />
-                  <circle
-                    cx="16"
-                    cy="16"
-                    r="14"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeDasharray={`${2 * Math.PI * 14}`}
-                    strokeDashoffset={`${2 * Math.PI * 14 * (1 - holdProgress)}`}
-                    strokeLinecap="round"
-                    className="text-primary transition-none"
-                    style={{
-                      transform: 'rotate(-90deg)',
-                      transformOrigin: '16px 16px',
+              <div
+                ref={(node) => {
+                  if (node) {
+                    handleRef.current = node;
+                  }
+                }}
+                className="relative text-muted-foreground hover:text-foreground pt-1 flex items-center justify-center"
+                title="Drag from anywhere on the card to reorder"
+              >
+                {/* Progress ring SVG - positioned at the drag handle icon, pointer-events-none ensures it never blocks interaction */}
+                {isHolding && !isActivated && (
+                  <svg
+                    className="absolute left-1/2 w-8 h-8 pointer-events-none"
+                    viewBox="0 0 32 32"
+                    style={{ 
+                      top: 'calc(0.25rem + 0.625rem)', // pt-1 (4px) + half icon height (10px) = icon center at 14px
+                      transform: 'translate(-50%, -50%)',
                     }}
-                  />
-                </svg>
-              )}
-              {enableHTML5Drag ? (
-                <div
-                  ref={(node) => {
-                    handleRef.current = node;
-                    setActivatorNodeRef(node);
-                  }}
-                  {...listeners}
-                  draggable
-                  onDragStart={handleHTML5DragStart}
-                  onDragEnd={handleHTML5DragEnd}
-                  onPointerDownCapture={handlePointerDownCapture}
-                  onMouseDown={(e) => {
-                    // Prevent dnd-kit from handling drags that start on the HTML5 drag handle
-                    e.stopPropagation();
-                  }}
-                  className={`text-muted-foreground hover:text-foreground pt-1 ${
-                    isActivated ? 'cursor-grabbing' : 'cursor-grab'
-                  }`}
-                  title="Drag to reorder or drag to calendar"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <GripVertical className="w-5 h-5" />
-                </div>
-              ) : (
-                <div
-                  ref={(node) => {
-                    handleRef.current = node;
-                    setActivatorNodeRef(node);
-                  }}
-                  {...listeners}
-                  onPointerDownCapture={handlePointerDownCapture}
-                  className={`text-muted-foreground hover:text-foreground pt-1 ${
-                    isActivated ? 'cursor-grabbing' : 'cursor-grab'
-                  }`}
-                  title="Drag to reorder"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <GripVertical className="w-5 h-5" />
-                </div>
-              )}
+                  >
+                    <circle
+                      cx="16"
+                      cy="16"
+                      r="14"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      className="text-primary/20"
+                    />
+                    <circle
+                      cx="16"
+                      cy="16"
+                      r="14"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeDasharray={`${2 * Math.PI * 14}`}
+                      strokeDashoffset={`${2 * Math.PI * 14 * (1 - holdProgress)}`}
+                      strokeLinecap="round"
+                      className="text-primary transition-none"
+                      style={{
+                        transform: 'rotate(-90deg)',
+                        transformOrigin: '16px 16px',
+                      }}
+                    />
+                  </svg>
+                )}
+                <GripVertical className="w-5 h-5" />
+              </div>
             </div>
             {/* Move Down Arrow - always reserve space */}
             <div className={index < totalTasks - 1 && onMoveDown ? "" : "h-8 w-8"}>
@@ -449,20 +454,43 @@ export default function SortableTaskCard({
               <span className={`text-xs px-2 py-1 rounded-full ${priorityConfig.bg} ${priorityConfig.color}`}>
                 {priorityConfig.label}
               </span>
-              {task.energy_required && ENERGY_CONFIG[task.energy_required] && (
-                <span 
-                  className={`text-xs px-2 py-1 rounded-full ${ENERGY_CONFIG[task.energy_required].color} font-medium`}
-                  title={`Energy: ${ENERGY_CONFIG[task.energy_required].fullLabel}`}
+              <Select
+                key={`energy-${task.id}-${task.energy_required || 'medium'}`}
+                value={task.energy_required || "medium"}
+                onValueChange={(value) => {
+                  if (onUpdateTask) {
+                    onUpdateTask(task.id, { energy_required: value });
+                  }
+                }}
+              >
+                <SelectTrigger 
+                  className="h-auto p-0 border-none shadow-none hover:opacity-80 focus:ring-0 focus:ring-offset-0 bg-transparent w-auto min-w-0"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {ENERGY_CONFIG[task.energy_required].label}
-                </span>
-              )}
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <ArrowUp className="w-3 h-3" /> Urgency: {task.urgency}
-              </span>
-              <span className="text-xs text-muted-foreground flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" /> Importance: {task.importance}
-              </span>
+                  <SelectValue>
+                    {(() => {
+                      const energyValue = task.energy_required || "medium";
+                      const config = ENERGY_CONFIG[energyValue] || ENERGY_CONFIG.medium;
+                      return (
+                        <span className={`text-xs px-2 py-1 rounded-full ${config.color} font-medium cursor-pointer`}>
+                          {config.label}
+                        </span>
+                      );
+                    })()}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent onClick={(e) => e.stopPropagation()}>
+                  <SelectItem value="low">
+                    <span className={`${ENERGY_CONFIG.low.color} font-medium`}>⚡ {ENERGY_CONFIG.low.fullLabel}</span>
+                  </SelectItem>
+                  <SelectItem value="medium">
+                    <span className={`${ENERGY_CONFIG.medium.color} font-medium`}>⚡⚡ {ENERGY_CONFIG.medium.fullLabel}</span>
+                  </SelectItem>
+                  <SelectItem value="high">
+                    <span className={`${ENERGY_CONFIG.high.color} font-medium`}>⚡⚡⚡ {ENERGY_CONFIG.high.fullLabel}</span>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

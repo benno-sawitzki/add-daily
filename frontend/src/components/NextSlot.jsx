@@ -1,4 +1,3 @@
-import { useDroppable } from "@dnd-kit/core";
 import NextControlCenter from "./NextControlCenter";
 import TaskEditDialog from "./TaskEditDialog";
 import { useState } from "react";
@@ -19,10 +18,6 @@ export default function NextSlot({
   currentEnergy = 'medium',
   onEnergyChange,
 }) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: "next-slot",
-  });
-
   const [editingTask, setEditingTask] = useState(null);
 
   const handleEditTask = (taskToEdit) => {
@@ -31,12 +26,7 @@ export default function NextSlot({
 
   return (
     <>
-      <div
-        ref={setNodeRef}
-        className={`lg:sticky lg:top-24 transition-all ${
-          isOver ? "scale-105" : ""
-        }`}
-      >
+      <div className="lg:sticky lg:top-24">
         <NextControlCenter
           task={task}
           inboxTasks={inboxTasks || []}
