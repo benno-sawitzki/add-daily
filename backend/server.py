@@ -101,8 +101,8 @@ else:
 # Must be added BEFORE routes are defined
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
-    allow_credentials=True,
+    allow_origins=cors_origins,  # Use parsed origins from CORS_ORIGINS env var
+    allow_credentials=allow_creds,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["authorization", "content-type", "accept", "origin", "x-requested-with"],
     expose_headers=["*"],

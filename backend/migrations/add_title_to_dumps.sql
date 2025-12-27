@@ -2,3 +2,4 @@
 ALTER TABLE dumps ADD COLUMN IF NOT EXISTS title TEXT;
 
 
+

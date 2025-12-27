@@ -20,3 +20,4 @@ WHERE urgency IS NULL OR importance IS NULL OR priority IS NULL OR energy_requir
 
 
 
+
