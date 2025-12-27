@@ -78,6 +78,16 @@ CORS_ORIGINS=https://your-app.vercel.app,https://your-app-git-main.vercel.app
    - After setting variables, make sure to redeploy
    - Environment variables are only available at build time for React apps
    - You may need to trigger a new deployment
+   - **IMPORTANT**: Make sure the variable is set for the **Production** environment (not just Preview)
+   - In Vercel, when adding the variable, check the "Production" checkbox
+   - After setting, go to Deployments and trigger a new production deployment
+
+5. **Check browser console for debug logs**:
+   - Open your deployed site
+   - Open browser DevTools → Console
+   - Look for logs starting with `[AuthContext]` or `[apiBase]`
+   - These will show what value is actually being used
+   - If you see `REACT_APP_BACKEND_URL: undefined`, the variable wasn't available at build time
 
 ### CORS Errors
 

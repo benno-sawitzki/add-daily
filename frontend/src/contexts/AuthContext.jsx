@@ -8,7 +8,22 @@ const getApiBase = () => {
     return '';
   }
   // In production, use REACT_APP_BACKEND_URL
-  return process.env.REACT_APP_BACKEND_URL || 'http://localhost:8010';
+  const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8010';
+  
+  // Debug logging (only in production, will be stripped in minified builds)
+  if (process.env.NODE_ENV === 'production') {
+    console.log('[AuthContext] NODE_ENV:', process.env.NODE_ENV);
+    console.log('[AuthContext] REACT_APP_BACKEND_URL:', process.env.REACT_APP_BACKEND_URL);
+    console.log('[AuthContext] Using API_BASE:', backendUrl);
+    
+    // Warn if using default localhost URL in production
+    if (!process.env.REACT_APP_BACKEND_URL || backendUrl === 'http://localhost:8010') {
+      console.error('[AuthContext] ⚠️ WARNING: REACT_APP_BACKEND_URL is not set! Using default localhost URL which will not work in production.');
+      console.error('[AuthContext] Please set REACT_APP_BACKEND_URL in Vercel environment variables and redeploy.');
+    }
+  }
+  
+  return backendUrl;
 };
 
 const API_BASE = getApiBase();
