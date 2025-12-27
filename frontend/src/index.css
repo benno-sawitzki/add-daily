@@ -39,6 +39,28 @@
   --radius: 0.75rem;
 }
 
+.light {
+  --background: 220 20% 98%;
+  --foreground: 220 15% 25%;
+  --card: 220 15% 99%;
+  --card-foreground: 220 15% 25%;
+  --popover: 220 15% 99%;
+  --popover-foreground: 220 15% 25%;
+  --primary: 239 65% 55%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 12% 96%;
+  --secondary-foreground: 220 20% 20%;
+  --muted: 220 10% 94%;
+  --muted-foreground: 220 10% 45%;
+  --accent: 220 12% 96%;
+  --accent-foreground: 220 20% 20%;
+  --destructive: 0 72% 52%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 220 12% 88%;
+  --input: 220 12% 88%;
+  --ring: 239 65% 55%;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -49,8 +71,11 @@ body {
     'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: hsl(220, 40%, 2%);
-  color: hsl(210, 40%, 98%);
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+  transition: background-color 0.3s ease, color 0.3s ease;
+  overflow-y: scroll !important; /* Always show scrollbar to prevent layout shifts */
+  scrollbar-gutter: stable !important; /* Reserve space for scrollbar to prevent layout shifts */
 }
 
 code {
@@ -66,6 +91,11 @@ h1, h2, h3, h4, h5, h6 {
   body {
     @apply bg-background text-foreground;
   }
+  
+  html {
+    overflow-y: scroll !important; /* Always show scrollbar to prevent layout shifts */
+    scrollbar-gutter: stable !important; /* Reserve space for scrollbar to prevent layout shifts */
+  }
 }
 
 /* Custom scrollbar */
@@ -75,16 +105,16 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 ::-webkit-scrollbar-track {
-  background: hsl(220, 30%, 7%);
+  background: hsl(var(--card));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(220, 20%, 20%);
+  background: hsl(var(--muted));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(220, 20%, 30%);
+  background: hsl(var(--muted-foreground));
 }
 
 /* Voice orb animation */
@@ -173,4 +203,40 @@ h1, h2, h3, h4, h5, h6 {
 
 .task-card.hold-pulse {
   animation: hold-pulse 1.5s ease-in-out infinite;
+}
+
+/* Prevent layout shifts when dropdown menus open */
+[data-radix-popper-content-wrapper] {
+  scrollbar-gutter: stable;
+}
+
+/* Prevent dropdown menu from causing body scrollbar shifts */
+[data-radix-dropdown-menu-content] {
+  scrollbar-gutter: stable;
+  overflow-y: auto;
+}
+
+/* Ensure body never loses scrollbar when dropdown opens */
+body:has([data-radix-dropdown-menu-content][data-state="open"]) {
+  overflow-y: scroll !important;
+}
+
+/* Prevent any layout shifts from Radix UI portals */
+[data-radix-portal] {
+  position: fixed;
+  z-index: 50;
+}
+
+/* Lock body width to prevent horizontal shifts */
+body {
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+/* Ensure html also maintains width */
+html {
+  width: 100%;
+  min-width: 100%;
+  max-width: 100%;
 }

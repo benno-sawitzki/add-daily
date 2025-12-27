@@ -5,6 +5,8 @@
  * @param {string} energyLevel - 'low'|'medium'|'high'
  * @returns {string|null} - Task ID of suggested next task, or null if no tasks
  */
+import { computeUrgency } from "./urgency";
+
 export function pickSuggestedNext(inboxTasks, energyLevel = 'medium') {
   if (!inboxTasks || inboxTasks.length === 0) {
     return null;
@@ -25,8 +27,14 @@ export function pickSuggestedNext(inboxTasks, energyLevel = 'medium') {
   const scoredTasks = availableTasks.map(task => {
     // Base score components
     const priority = task.priority || 2;
-    const urgency = task.urgency || 2;
-    const importance = task.importance || 2;
+    
+    // Compute urgency from scheduled_date/time
+    const urgency = computeUrgency(task);
+    const urgencyScore = urgency.rank === 99 ? 0 : (4 - urgency.rank) * 25; // Lower rank = higher urgency score
+    
+    // Map impakt to score (high=3, medium=2, low=1, null=0)
+    const impaktMap = { 'high': 3, 'medium': 2, 'low': 1, null: 0, undefined: 0 };
+    const impaktScore = (impaktMap[task.impakt] || 0) * 20;
     
     // Calculate age in days (capped at 7)
     const createdDate = new Date(task.created_at);
@@ -36,7 +44,7 @@ export function pickSuggestedNext(inboxTasks, energyLevel = 'medium') {
     );
 
     // Base score
-    let score = priority * 100 + urgency * 25 + importance * 20 + ageDays * 5;
+    let score = priority * 100 + urgencyScore + impaktScore + ageDays * 5;
 
     // Energy/Effort matching (primary factor)
     // Use effort field if available, fallback to energy_required

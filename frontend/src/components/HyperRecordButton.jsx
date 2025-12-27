@@ -20,6 +20,12 @@ function PulsingRing({ isRecording, audioLevel = 0, buttonSize = 40, isPressed =
   const smoothRadiusRef = useRef(0);
   const smoothOpacityRef = useRef(0);
   const smoothAudioLevelRef = useRef(0);
+  
+  // Check if we're in light mode - check dynamically in the draw function
+  const checkLightMode = () => {
+    if (typeof document === 'undefined') return false;
+    return document.documentElement.classList.contains('light');
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -99,8 +105,9 @@ function PulsingRing({ isRecording, audioLevel = 0, buttonSize = 40, isPressed =
         );
         // Much brighter glow when pressed
         const glowAlpha = isPressed ? ringAlpha * 1.2 : ringAlpha * 0.6;
-        // Use purple color when pressed, rose color otherwise
-        const glowColor = isPressed ? '147, 51, 234' : '244, 63, 94'; // purple-600 vs rose-500
+        // Use purple in light mode, red in dark mode
+        const isLight = checkLightMode();
+        const glowColor = isLight ? '147, 51, 234' : (isPressed ? '147, 51, 234' : '244, 63, 94'); // purple-600 in light mode, purple when pressed in dark, rose-500 otherwise
         glow.addColorStop(0, `rgba(${glowColor}, 0)`);
         glow.addColorStop(0.5, `rgba(${glowColor}, ${Math.min(1, glowAlpha)})`);
         glow.addColorStop(1, `rgba(${glowColor}, 0)`);
@@ -119,8 +126,9 @@ function PulsingRing({ isRecording, audioLevel = 0, buttonSize = 40, isPressed =
         const ringThickness = isPressed 
           ? 4 + breathe * 2  // Thicker and pulsing when pressed
           : (isRecording ? 2 + smoothAudioLevelRef.current * 2 : 2);
-        // Use purple color when pressed, rose color otherwise
-        const ringColor = isPressed ? '147, 51, 234' : '244, 63, 94'; // purple-600 vs rose-500
+        // Use purple in light mode, red in dark mode
+        const isLight = checkLightMode();
+        const ringColor = isLight ? '147, 51, 234' : (isPressed ? '147, 51, 234' : '244, 63, 94'); // purple-600 in light mode, purple when pressed in dark, rose-500 otherwise
         ctx.strokeStyle = `rgba(${ringColor}, ${ringAlpha})`;
         ctx.lineWidth = ringThickness;
         ctx.lineCap = "round";

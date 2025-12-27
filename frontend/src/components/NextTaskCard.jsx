@@ -1,7 +1,15 @@
 import { useState } from "react";
+import { computeUrgency, getUrgencyBadgeClasses } from "@/utils/urgency";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   AlertCircle,
@@ -17,16 +25,49 @@ import {
 } from "lucide-react";
 
 const PRIORITY_CONFIG = {
-  4: { label: "Critical", color: "text-rose-400", bg: "bg-rose-500/10", border: "border-l-rose-500", icon: AlertCircle },
-  3: { label: "High", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-l-amber-500", icon: ArrowUp },
-  2: { label: "Medium", color: "text-primary", bg: "bg-primary/10", border: "border-l-primary", icon: ArrowRight },
-  1: { label: "Low", color: "text-muted-foreground", bg: "bg-muted/50", border: "border-l-muted-foreground", icon: ArrowDown },
+  4: { 
+    label: "Critical", 
+    color: "text-rose-600 dark:text-rose-400", 
+    bg: "bg-rose-100 dark:bg-rose-500/10", 
+    border: "border-l-rose-500", 
+    icon: AlertCircle 
+  },
+  3: { 
+    label: "High", 
+    color: "text-amber-900 dark:text-amber-400", 
+    bg: "bg-amber-200 dark:bg-amber-500/10", 
+    border: "border-l-amber-500", 
+    icon: ArrowUp 
+  },
+  2: { 
+    label: "Medium", 
+    color: "text-primary dark:text-primary", 
+    bg: "bg-primary/15 dark:bg-primary/10", 
+    border: "border-l-primary", 
+    icon: ArrowRight 
+  },
+  1: { 
+    label: "Low", 
+    color: "text-slate-600 dark:text-muted-foreground", 
+    bg: "bg-slate-100 dark:bg-muted/50", 
+    border: "border-l-muted-foreground", 
+    icon: ArrowDown 
+  },
 };
 
 const ENERGY_CONFIG = {
-  low: { label: "Low", color: "bg-slate-500/20 text-slate-300" },
-  medium: { label: "Medium", color: "bg-blue-500/20 text-blue-300" },
-  high: { label: "High", color: "bg-purple-500/20 text-purple-300" },
+  low: { 
+    label: "Low", 
+    color: "bg-slate-100 dark:bg-slate-500/20 text-slate-600 dark:text-slate-300" 
+  },
+  medium: { 
+    label: "Medium", 
+    color: "bg-blue-100 dark:bg-blue-500/20 text-blue-700 dark:text-blue-300" 
+  },
+  high: { 
+    label: "High", 
+    color: "bg-purple-100 dark:bg-purple-500/20 text-purple-700 dark:text-purple-300" 
+  },
 };
 
 export default function NextTaskCard({ 
@@ -39,6 +80,7 @@ export default function NextTaskCard({
   onCompleteTask,
   onEditTask,
   onMoveToInbox,
+  onUpdateTask,
   doneButtonRef,
 }) {
   const [duration, setDuration] = useState(hyperfocusSession?.modeMinutes || 30);
@@ -47,6 +89,9 @@ export default function NextTaskCard({
   const priorityConfig = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG[2];
   const PriorityIcon = priorityConfig.icon;
   const energyConfig = task.energy_required ? ENERGY_CONFIG[task.energy_required] : null;
+  
+  // Compute urgency from scheduled_date/time
+  const urgency = computeUrgency(task);
 
   // Use status enum for single source of truth
   const focusStatus = hyperfocusSession?.status;
@@ -95,19 +140,51 @@ export default function NextTaskCard({
             {task.title}
           </h3>
           {task.description && (
-            <p className="text-sm text-muted-foreground mb-3 line-clamp-2">
+            <p className="text-sm text-muted-foreground mb-3 line-clamp-2 whitespace-pre-line">
               {task.description}
             </p>
           )}
           <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant="outline" className={`${priorityConfig.bg} ${priorityConfig.color} border-current/20`}>
+            {/* Impakt (Priority) */}
+            <Badge variant="outline" className={`${priorityConfig.bg} ${priorityConfig.color} border-current/20 text-xs`}>
               {priorityConfig.label}
             </Badge>
-            {energyConfig && (
-              <Badge variant="outline" className={`${energyConfig.color} text-xs`}>
-                {energyConfig.label}
+            {/* Urgency */}
+            {urgency.label && (
+              <Badge variant="outline" className={`${getUrgencyBadgeClasses(urgency.status)} text-xs`}>
+                {urgency.label}
               </Badge>
             )}
+            {/* Energy - Selector with lightning bolts */}
+            <Select
+              key={`energy-${task.id}-${task.energy_required || 'medium'}`}
+              value={task.energy_required || "medium"}
+              onValueChange={(value) => {
+                if (onUpdateTask) {
+                  onUpdateTask(task.id, { energy_required: value });
+                }
+              }}
+            >
+              <SelectTrigger 
+                className="h-auto p-1.5 border border-border/50 shadow-none hover:opacity-80 focus:ring-0 focus:ring-offset-0 bg-transparent w-auto min-w-0 text-xs"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <SelectValue>
+                  {(() => {
+                    const energyValue = task.energy_required || "medium";
+                    if (energyValue === "low") return "⚡ Low";
+                    if (energyValue === "medium") return "⚡⚡ Medium";
+                    if (energyValue === "high") return "⚡⚡⚡ High";
+                    return "⚡⚡ Medium";
+                  })()}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent onClick={(e) => e.stopPropagation()}>
+                <SelectItem value="low">⚡ Low</SelectItem>
+                <SelectItem value="medium">⚡⚡ Medium</SelectItem>
+                <SelectItem value="high">⚡⚡⚡ High</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </div>
@@ -119,7 +196,11 @@ export default function NextTaskCard({
           <Button
             onClick={handleHyperfocusToggle}
             size="lg"
-            className="flex-1 gap-2"
+            className={`flex-1 gap-2 ${
+              isHyperfocusRunning || isHyperfocusPaused 
+                ? "" 
+                : "bg-primary/80 hover:bg-primary/70 text-primary-foreground dark:bg-primary dark:hover:bg-primary/90"
+            }`}
             variant={isHyperfocusRunning || isHyperfocusPaused ? "outline" : "default"}
           >
             {isHyperfocusRunning ? (
@@ -145,15 +226,15 @@ export default function NextTaskCard({
             {!isHyperfocusRunning && !isHyperfocusPaused && (
               <button
                 onClick={handleToggleDuration}
-                className="relative inline-flex items-center rounded-lg bg-slate-900/80 border border-primary/30 p-0.5 shadow-lg backdrop-blur-sm cursor-pointer w-full"
+                className="relative inline-flex items-center rounded-lg dark:bg-slate-900/80 bg-slate-100 border border-primary/20 dark:border-primary/30 p-0.5 shadow-sm dark:shadow-lg backdrop-blur-sm cursor-pointer w-full"
                 aria-label={`Toggle duration: ${duration === 30 ? 'Switch to 60 minutes' : 'Switch to 30 minutes'}`}
               >
                 {/* Glow effect */}
-                <div className="absolute inset-0 rounded-lg bg-primary/20 blur-sm opacity-0 transition-opacity duration-300 hover:opacity-100" />
+                <div className="absolute inset-0 rounded-lg bg-primary/10 dark:bg-primary/20 blur-sm opacity-0 transition-opacity duration-300 hover:opacity-100" />
                 
                 {/* Sliding background indicator */}
                 <div
-                  className="absolute inset-y-0.5 rounded-md bg-gradient-to-r from-primary via-primary/90 to-primary shadow-lg shadow-primary/50 transition-all duration-300 ease-in-out"
+                  className="absolute inset-y-0.5 rounded-md bg-primary/60 dark:bg-gradient-to-r dark:from-primary dark:via-primary/90 dark:to-primary shadow-sm dark:shadow-lg shadow-primary/20 dark:shadow-primary/50 transition-all duration-300 ease-in-out"
                   style={{
                     left: duration === 30 ? "0.125rem" : "calc(50% + 0.125rem)",
                     width: "calc(50% - 0.25rem)",
@@ -164,7 +245,7 @@ export default function NextTaskCard({
                 <span
                   className={`relative z-10 px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 flex-1 text-center ${
                     duration === 30
-                      ? "text-white"
+                      ? "text-primary-foreground dark:text-white"
                       : "text-muted-foreground"
                   }`}
                 >
@@ -173,7 +254,7 @@ export default function NextTaskCard({
                 <span
                   className={`relative z-10 px-3 py-1.5 text-xs font-semibold rounded-md transition-all duration-200 flex-1 text-center ${
                     duration === 60
-                      ? "text-white"
+                      ? "text-primary-foreground dark:text-white"
                       : "text-muted-foreground"
                   }`}
                 >

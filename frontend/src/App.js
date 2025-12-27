@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Outlet } from "react-router-dom";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { ThemeProvider } from "@/components/ThemeProvider";
 import { Toaster } from "sonner";
 import LandingPage from "@/components/LandingPage";
 import MainApp from "@/components/MainApp";
@@ -204,22 +205,24 @@ function AppRoutes() {
 
 function App() {
   return (
-    <BrowserRouter>
-      <AuthProvider>
-        <AppRoutes />
-        <Toaster 
-          position="bottom-right" 
-          richColors 
-          duration={2000}
-          toastOptions={{
-            style: {
-              fontSize: '14px',
-              padding: '12px 16px',
-            }
-          }}
-        />
-      </AuthProvider>
-    </BrowserRouter>
+    <ThemeProvider defaultTheme="system" storageKey="app-theme">
+      <BrowserRouter>
+        <AuthProvider>
+          <AppRoutes />
+          <Toaster 
+            position="bottom-right" 
+            richColors 
+            duration={2000}
+            toastOptions={{
+              style: {
+                fontSize: '14px',
+                padding: '12px 16px',
+              }
+            }}
+          />
+        </AuthProvider>
+      </BrowserRouter>
+    </ThemeProvider>
   );
 }
 

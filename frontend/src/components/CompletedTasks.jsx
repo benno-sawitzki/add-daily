@@ -35,7 +35,7 @@ export default function CompletedTasks({ tasks, onRestoreTask, onDeleteTask }) {
     return (
       <div className="flex flex-col items-center justify-center py-20" data-testid="completed-empty">
         <div className="w-20 h-20 rounded-full bg-card flex items-center justify-center mb-6">
-          <CheckCircle2 className="w-10 h-10 text-emerald-500/50" />
+          <CheckCircle2 className="w-10 h-10 text-emerald-600/60 dark:text-emerald-500/50" />
         </div>
         <h3 className="text-xl font-semibold mb-2">No completed tasks yet</h3>
         <p className="text-muted-foreground text-center max-w-md">
@@ -46,11 +46,11 @@ export default function CompletedTasks({ tasks, onRestoreTask, onDeleteTask }) {
   }
 
   return (
-    <div className="space-y-4" data-testid="completed-tasks">
+    <div className="space-y-4 min-h-0" data-testid="completed-tasks">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h2 className="text-2xl font-semibold flex items-center gap-2">
-            <CheckCircle2 className="w-6 h-6 text-emerald-500" />
+            <CheckCircle2 className="w-6 h-6 text-emerald-600 dark:text-emerald-500" />
             Completed Tasks
           </h2>
           <p className="text-muted-foreground mt-1">{tasks.length} tasks done</p>
@@ -67,8 +67,8 @@ export default function CompletedTasks({ tasks, onRestoreTask, onDeleteTask }) {
             >
               <div className="flex items-start gap-3">
                 {/* Completed indicator - always green */}
-                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-                  <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-500/20 dark:bg-emerald-500/10 flex items-center justify-center">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-500" />
                 </div>
 
                 {/* Task content */}
@@ -77,12 +77,12 @@ export default function CompletedTasks({ tasks, onRestoreTask, onDeleteTask }) {
                     {task.title}
                   </h3>
                   {task.description && (
-                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                    <p className="text-sm text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">
                       {task.description}
                     </p>
                   )}
                   <div className="flex items-center gap-3 mt-3">
-                    <span className="text-xs px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-500">
+                    <span className="text-xs px-2 py-1 rounded-full bg-emerald-500/20 dark:bg-emerald-500/10 text-emerald-600 dark:text-emerald-500">
                       Completed
                     </span>
                   </div>
@@ -134,9 +134,7 @@ export default function CompletedTasks({ tasks, onRestoreTask, onDeleteTask }) {
             variant="outline"
             className="text-muted-foreground hover:text-destructive hover:border-destructive"
             onClick={() => {
-              if (window.confirm(`Delete all ${tasks.length} completed tasks?`)) {
-                tasks.forEach(t => onDeleteTask(t.id));
-              }
+              tasks.forEach(t => onDeleteTask(t.id));
             }}
           >
             <Trash2 className="w-4 h-4 mr-2" />

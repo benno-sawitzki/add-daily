@@ -275,8 +275,7 @@ class Task(BaseModel):
     title: str
     description: Optional[str] = ""
     priority: int = Field(default=2, ge=1, le=4)  # 1=Low, 2=Medium, 3=High, 4=Critical
-    urgency: int = Field(default=2, ge=1, le=4)
-    importance: int = Field(default=2, ge=1, le=4)
+    impakt: Optional[str] = Field(default=None)  # low, medium, high, or None
     scheduled_date: Optional[str] = None  # ISO date string
     scheduled_time: Optional[str] = None  # HH:MM format
     duration: int = Field(default=30)  # Duration in minutes (30, 60, 90, etc.)
@@ -289,8 +288,7 @@ class TaskCreate(BaseModel):
     title: str
     description: Optional[str] = ""
     priority: Optional[int] = 2
-    urgency: Optional[int] = 2
-    importance: Optional[int] = 2
+    impakt: Optional[str] = None  # low, medium, high, or None
     scheduled_date: Optional[str] = None
     scheduled_time: Optional[str] = None
     status: Optional[str] = "inbox"
@@ -299,8 +297,7 @@ class TaskUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[int] = None
-    urgency: Optional[int] = None
-    importance: Optional[int] = None
+    impakt: Optional[str] = None  # low, medium, high, or None
     scheduled_date: Optional[str] = None
     scheduled_time: Optional[str] = None
     duration: Optional[int] = None
@@ -326,7 +323,7 @@ class SettingsUpdate(BaseModel):
 def transform_task_to_frontend_format(task_data: dict) -> dict:
     """
     Transform task from new schema (title, due_date, notes, priority) 
-    to frontend-expected format (title, description, urgency, importance, priority, duration).
+    to frontend-expected format (title, description, impakt, priority, duration).
     
     Args:
         task_data: Task with new schema fields
@@ -348,15 +345,42 @@ def transform_task_to_frontend_format(task_data: dict) -> dict:
     
     priority_num = priority_map[priority_str]
     
-    # Calculate urgency and importance from priority
-    # High priority (4) = high urgency (4) + high importance (4)
-    # Medium priority (2) = medium urgency (2) + medium importance (2)
-    # Low priority (1) = low urgency (1) + low importance (1)
-    urgency = priority_num
-    importance = priority_num
+    # Determine impakt from text analysis and priority
+    # Check for "very important", "important", "high impact" etc. in notes/title
+    notes = task_data.get("notes", "") or ""
+    title = task_data.get("title", "") or ""
+    text_to_check = f"{title} {notes}".lower()
+    
+    impakt = None  # Default: not set
+    # Check for high impakt indicators
+    high_impakt_patterns = [
+        r"very\s+important",
+        r"high\s+impact",
+        r"critical\s+impact",
+        r"high\s+leverage",
+        r"very\s+high\s+importance",
+    ]
+    import re
+    for pattern in high_impakt_patterns:
+        if re.search(pattern, text_to_check):
+            impakt = "high"
+            break
+    
+    # If no high impakt found, check for medium/low indicators
+    if impakt is None:
+        medium_impakt_patterns = [
+            r"important",
+            r"medium\s+impact",
+            r"some\s+importance",
+        ]
+        for pattern in medium_impakt_patterns:
+            if re.search(pattern, text_to_check):
+                impakt = "medium"
+                break
+    
+    # If still None, leave it as None (not set) - reduces friction for new tasks
     
     # Get notes for description (always needed)
-    notes = task_data.get("notes", "") or ""
     
     # Handle due_text (new schema) - append to notes if present
     due_text = task_data.get("due_text")
@@ -420,8 +444,7 @@ def transform_task_to_frontend_format(task_data: dict) -> dict:
     return {
         "title": task_data.get("title", "Untitled Task"),
         "description": notes or "",  # Use notes as description
-        "urgency": urgency,
-        "importance": importance,
+        "impakt": impakt,  # low, medium, high, or None
         "priority": priority_num,
         "duration": duration,
     }
@@ -3448,6 +3471,52 @@ async def google_auth(auth_data: GoogleAuthRequest):
         user={"id": user_id, "email": user_email, "name": user_name, "avatar_url": user_avatar}
     )
 
+# Helper function to build task SELECT clause and convert rows
+async def build_task_select_clause(conn, include_optional: bool = True) -> tuple:
+    """Build SELECT clause for tasks, handling migration from importance to impakt."""
+    impakt_exists = await conn.fetchval(
+        """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'impakt')"""
+    )
+    energy_required_exists = await conn.fetchval(
+        """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
+    )
+    
+    if impakt_exists:
+        base_select = """id, user_id, title, description, priority, impakt, 
+                   scheduled_date::text, scheduled_time, duration, status, created_at::text"""
+    else:
+        # During migration: convert importance integer to impakt string
+        base_select = """id, user_id, title, description, priority, 
+                   CASE 
+                     WHEN importance = 1 THEN 'low'
+                     WHEN importance = 2 THEN 'medium'
+                     WHEN importance = 3 THEN 'high'
+                     WHEN importance = 4 THEN 'high'
+                     ELSE NULL
+                   END as impakt,
+                   scheduled_date::text, scheduled_time, duration, status, created_at::text"""
+    
+    energy_select = ", energy_required" if energy_required_exists else ""
+    select_clause = base_select + energy_select
+    
+    return select_clause, impakt_exists
+
+def convert_task_row_to_dict(row: dict) -> dict:
+    """Convert a database row to Task dict format, handling impakt conversion."""
+    task_dict = dict(row)
+    # Ensure impakt is a string (low/medium/high) or None
+    if 'impakt' in task_dict:
+        if task_dict['impakt'] is None or isinstance(task_dict['impakt'], str):
+            pass  # Already correct
+        else:
+            # Convert integer to string if needed
+            impakt_map = {1: 'low', 2: 'medium', 3: 'high', 4: 'high'}
+            task_dict['impakt'] = impakt_map.get(task_dict['impakt'])
+    # Remove urgency if it exists (shouldn't be selected, but just in case)
+    task_dict.pop('urgency', None)
+    task_dict.pop('importance', None)  # Remove old field from response
+    return task_dict
+
 # Task CRUD
 @api_router.post("/tasks", response_model=Task)
 async def create_task(task_input: TaskCreate, user: dict = Depends(get_current_user)):
@@ -3462,29 +3531,39 @@ async def create_task(task_input: TaskCreate, user: dict = Depends(get_current_u
             except (ValueError, AttributeError):
                 expires_at_value = None
         
-        await conn.execute(
-            """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-               scheduled_date, scheduled_time, duration, status, expires_at, created_at)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
-            task.id, user["id"], task.title, task.description, task.priority, task.urgency, task.importance,
-            task.scheduled_date, task.scheduled_time, task.duration, task.status, expires_at_value, datetime.now(timezone.utc)
+        # Check if impakt column exists, otherwise fall back to importance for migration
+        impakt_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'impakt')"""
         )
+        
+        if impakt_exists:
+            # Map impakt string to integer for backwards compatibility if needed
+            impakt_value = task.impakt
+            await conn.execute(
+                """INSERT INTO tasks (id, user_id, title, description, priority, impakt, 
+                   scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                task.id, user["id"], task.title, task.description, task.priority, impakt_value,
+                task.scheduled_date, task.scheduled_time, task.duration, task.status, expires_at_value, datetime.now(timezone.utc)
+            )
+        else:
+            # Fallback: map impakt to old importance integer format during migration
+            impakt_to_int = {'low': 1, 'medium': 2, 'high': 3, None: 2}
+            importance_value = impakt_to_int.get(task.impakt, 2)
+            await conn.execute(
+                """INSERT INTO tasks (id, user_id, title, description, priority, importance, 
+                   scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                task.id, user["id"], task.title, task.description, task.priority, importance_value,
+                task.scheduled_date, task.scheduled_time, task.duration, task.status, expires_at_value, datetime.now(timezone.utc)
+            )
     return task
 
 @api_router.get("/tasks", response_model=List[Task])
 async def get_tasks(status: Optional[str] = None, user: dict = Depends(get_current_user)):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        # Check if energy_required column exists
-        energy_required_exists = await conn.fetchval(
-            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
-        )
-        
-        # Build SELECT clause dynamically
-        base_select = """id, user_id, title, description, priority, urgency, importance, 
-                   scheduled_date::text, scheduled_time, duration, status, created_at::text"""
-        energy_select = ", energy_required" if energy_required_exists else ""
-        select_clause = base_select + energy_select
+        select_clause, _ = await build_task_select_clause(conn)
         
         if status:
             rows = await conn.fetch(
@@ -3499,30 +3578,14 @@ async def get_tasks(status: Optional[str] = None, user: dict = Depends(get_curre
                 user["id"]
             )
     
-    result = [dict(row) for row in rows]
-    # Log if energy_required is in the response
-    logger.info(f"[get_tasks] energy_required_exists: {energy_required_exists}, select_clause includes energy: {'energy_required' in select_clause}")
-    if result:
-        sample_task = result[0]
-        logger.info(f"[get_tasks] Returning {len(result)} tasks, energy_required in response: {'energy_required' in sample_task}, sample keys: {list(sample_task.keys())}")
-        if 'energy_required' in sample_task:
-            logger.info(f"[get_tasks] Sample task energy_required value: {sample_task.get('energy_required')}")
+    result = [convert_task_row_to_dict(row) for row in rows]
     return result
 
 @api_router.get("/tasks/{task_id}", response_model=Task)
 async def get_task(task_id: str, user: dict = Depends(get_current_user)):
     pool = await get_db_pool()
     async with pool.acquire() as conn:
-        # Check if energy_required column exists
-        energy_required_exists = await conn.fetchval(
-            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
-        )
-        
-        # Build SELECT clause dynamically
-        base_select = """id, user_id, title, description, priority, urgency, importance, 
-               scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text"""
-        energy_select = ", energy_required" if energy_required_exists else ""
-        select_clause = base_select + energy_select
+        select_clause, _ = await build_task_select_clause(conn)
         
         row = await conn.fetchrow(
             f"""SELECT {select_clause}
@@ -3531,11 +3594,22 @@ async def get_task(task_id: str, user: dict = Depends(get_current_user)):
         )
     if not row:
         raise HTTPException(status_code=404, detail="Task not found")
-    return dict(row)
+    return convert_task_row_to_dict(row)
 
 @api_router.patch("/tasks/{task_id}", response_model=Task)
 async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depends(get_current_user)):
-    update_data = {k: v for k, v in task_update.model_dump().items() if v is not None}
+    # Include description even if it's an empty string (to allow clearing descriptions)
+    update_data = {}
+    for k, v in task_update.model_dump().items():
+        if v is not None:
+            update_data[k] = v
+        elif k == 'description':
+            # Always include description, even if None (to allow clearing it)
+            update_data[k] = ""
+    
+    # Log description update for debugging
+    if 'description' in update_data:
+        logger.info(f"[update_task] Description update: '{update_data['description']}' (type: {type(update_data['description']).__name__})")
     if not update_data:
         raise HTTPException(status_code=400, detail="No update data provided")
     
@@ -3547,9 +3621,25 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         )
         
         # Build dynamic update query with proper parameterization
+        # Check if impakt column exists
+        impakt_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'impakt')"""
+        )
+        
         # Only allow updating specific fields that exist in the database
-        allowed_fields = {'title', 'description', 'priority', 'urgency', 'importance', 
+        allowed_fields = {'title', 'description', 'priority', 
                          'scheduled_date', 'scheduled_time', 'duration', 'status', 'expires_at', 'sort_order'}
+        if impakt_exists:
+            allowed_fields.add('impakt')
+        # Handle backwards compatibility: accept 'importance' and convert to 'impakt' during migration
+        if not impakt_exists:
+            # During migration, accept importance and convert
+            if 'importance' in update_data:
+                impakt_map = {1: 'low', 2: 'medium', 3: 'high', 4: 'high'}
+                importance_val = update_data['importance']
+                if importance_val in impakt_map:
+                    update_data['importance'] = impakt_map[importance_val]
+                allowed_fields.add('importance')
         if energy_required_exists:
             allowed_fields.add('energy_required')
         
@@ -3634,13 +3724,11 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         )
         # energy_required_exists already checked above
         
-        # Build RETURNING clause dynamically
-        base_returning = "id, user_id, title, description, priority, urgency, importance, scheduled_date::text, scheduled_time, duration, status, expires_at::text"
+        # Build RETURNING clause dynamically using helper
+        select_clause, _ = await build_task_select_clause(conn)
         completed_at_returning = ", completed_at::text" if completed_at_exists else ""
         sort_order_returning = ", sort_order" if sort_order_exists else ""
-        energy_required_returning = ", energy_required" if energy_required_exists else ""
-        created_at_returning = ", created_at::text"
-        returning_clause = base_returning + completed_at_returning + sort_order_returning + energy_required_returning + created_at_returning
+        returning_clause = select_clause + completed_at_returning + sort_order_returning
         
         # Use RETURNING to get updated row in a single query (much faster)
         query = f"""UPDATE tasks SET {', '.join(set_clauses)} 
@@ -3649,6 +3737,10 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
         
         try:
             logger.info(f"Updating task {task_id} with {len(filtered_data)} fields: {list(filtered_data.keys())}")
+            if 'description' in filtered_data:
+                logger.info(f"  description value: '{filtered_data.get('description')}' (type: {type(filtered_data.get('description')).__name__})")
+            else:
+                logger.warning(f"  description NOT in filtered_data! update_data keys: {list(update_data.keys())}")
             logger.info(f"  energy_required column exists: {energy_required_exists}")
             if 'energy_required' in filtered_data:
                 logger.info(f"  energy_required value: {filtered_data.get('energy_required')}")
@@ -3672,10 +3764,18 @@ async def update_task(task_id: str, task_update: TaskUpdate, user: dict = Depend
             
             result = dict(row)
             logger.info(f"[update_task] Response data keys: {list(result.keys())}")
+            if 'description' in result:
+                logger.info(f"[update_task] Response description value: '{result.get('description')}' (type: {type(result.get('description')).__name__})")
+            else:
+                logger.warning(f"[update_task] description NOT in response! Returning clause was: {returning_clause}")
             if 'energy_required' in result:
                 logger.info(f"[update_task] Response energy_required value: {result.get('energy_required')}")
             else:
                 logger.warning(f"[update_task] energy_required NOT in response! Returning clause was: {returning_clause}")
+            
+            # Ensure description is always in the response, even if empty
+            if 'description' not in result:
+                result['description'] = ""
             
             return result
         except HTTPException:
@@ -4332,40 +4432,86 @@ async def push_to_inbox(request: PushToCalendarRequest, user: dict = Depends(get
                 params = []
                 param_num = 1
                 
+                # Check if impakt column exists
+                impakt_exists = await conn.fetchval(
+                    """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'impakt')"""
+                )
+                
                 for task_data in request.tasks:
                     task_id = task_data.get("id", str(uuid.uuid4()))
-                    values_list.append(
-                        f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
-                        f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
-                        f"${param_num+8}, ${param_num+9}, ${param_num+10}, ${param_num+11}, "
-                        f"${param_num+12}, ${param_num+13})"
-                    )
-                    params.extend([
-                        task_id,
-                        user["id"],
-                        task_data.get("title", "Untitled Task"),
-                        task_data.get("description", ""),
-                        task_data.get("priority", 2),
-                        task_data.get("urgency", 2),
-                        task_data.get("importance", 2),
-                        task_data.get("energy_required", "medium"),  # energy_required
-                        None,  # scheduled_date (NULL for inbox tasks)
-                        None,  # scheduled_time (NULL for inbox tasks)
-                        task_data.get("duration", 30),
-                        "inbox",  # status
-                        None,  # expires_at (NULL for inbox tasks)
-                        created_at
-                    ])
-                    param_num += 14
+                    # Get impakt from task_data, or convert from old importance if present
+                    impakt_value = task_data.get("impakt")
+                    if not impakt_value and "importance" in task_data:
+                        impakt_map = {1: 'low', 2: 'medium', 3: 'high', 4: 'high'}
+                        impakt_value = impakt_map.get(task_data.get("importance"))
+                    
+                    if impakt_exists:
+                        values_list.append(
+                            f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
+                            f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
+                            f"${param_num+8}, ${param_num+9}, ${param_num+10}, ${param_num+11}, "
+                            f"${param_num+12}, ${param_num+13})"
+                        )
+                        params.extend([
+                            task_id,
+                            user["id"],
+                            task_data.get("title", "Untitled Task"),
+                            task_data.get("description", ""),
+                            task_data.get("priority", 2),
+                            impakt_value,  # impakt
+                            task_data.get("energy_required", "medium"),  # energy_required
+                            None,  # scheduled_date (NULL for inbox tasks)
+                            None,  # scheduled_time (NULL for inbox tasks)
+                            task_data.get("duration", 30),
+                            "inbox",  # status
+                            None,  # expires_at (NULL for inbox tasks)
+                            created_at
+                        ])
+                        param_num += 14
+                    else:
+                        # Fallback during migration: use importance integer
+                        impakt_to_int = {'low': 1, 'medium': 2, 'high': 3, None: 2}
+                        importance_value = impakt_to_int.get(impakt_value, 2)
+                        values_list.append(
+                            f"(${param_num}, ${param_num+1}, ${param_num+2}, ${param_num+3}, "
+                            f"${param_num+4}, ${param_num+5}, ${param_num+6}, ${param_num+7}, "
+                            f"${param_num+8}, ${param_num+9}, ${param_num+10}, ${param_num+11}, "
+                            f"${param_num+12}, ${param_num+13})"
+                        )
+                        params.extend([
+                            task_id,
+                            user["id"],
+                            task_data.get("title", "Untitled Task"),
+                            task_data.get("description", ""),
+                            task_data.get("priority", 2),
+                            importance_value,  # importance (migration fallback)
+                            task_data.get("energy_required", "medium"),  # energy_required
+                            None,  # scheduled_date (NULL for inbox tasks)
+                            None,  # scheduled_time (NULL for inbox tasks)
+                            task_data.get("duration", 30),
+                            "inbox",  # status
+                            None,  # expires_at (NULL for inbox tasks)
+                            created_at
+                        ])
+                        param_num += 14
                 
                 # Single batch INSERT with RETURNING - much faster!
-                query = f"""
-                    INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, energy_required,
-                                     scheduled_date, scheduled_time, duration, status, expires_at, created_at)
-                    VALUES {', '.join(values_list)}
-                    RETURNING id, user_id, title, description, priority, urgency, importance, energy_required,
-                              scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
-                """
+                if impakt_exists:
+                    query = f"""
+                        INSERT INTO tasks (id, user_id, title, description, priority, impakt, energy_required,
+                                         scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                        VALUES {', '.join(values_list)}
+                        RETURNING id, user_id, title, description, priority, impakt, energy_required,
+                                  scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+                    """
+                else:
+                    query = f"""
+                        INSERT INTO tasks (id, user_id, title, description, priority, importance, energy_required,
+                                         scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                        VALUES {', '.join(values_list)}
+                        RETURNING id, user_id, title, description, priority, importance, energy_required,
+                                  scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+                    """
                 
                 rows = await conn.fetch(query, *params)
                 created_tasks = [dict(row) for row in rows]
@@ -4432,38 +4578,56 @@ async def push_to_calendar(request: PushToCalendarRequest, user: dict = Depends(
                 
                 scheduled_time = f"{current_hour:02d}:{current_minute:02d}"
                 
+                # Check if impakt column exists
+                impakt_exists = await conn.fetchval(
+                    """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'impakt')"""
+                )
+                
                 # Ensure all required fields have defaults
                 task_id = task_data.get("id") or str(uuid.uuid4())
                 title = task_data.get("title") or "Untitled Task"
                 description = task_data.get("description") or ""
-                urgency = task_data.get("urgency", 2)
-                importance = task_data.get("importance", 2)
                 priority = task_data.get("priority", 2)
                 duration = task_data.get("duration", 30)
                 
-                # Validate priority, urgency, importance are in valid range
+                # Get impakt from task_data, or convert from old importance if present
+                impakt_value = task_data.get("impakt")
+                if not impakt_value and "importance" in task_data:
+                    impakt_map = {1: 'low', 2: 'medium', 3: 'high', 4: 'high'}
+                    impakt_value = impakt_map.get(task_data.get("importance"))
+                
+                # Validate priority is in valid range
                 priority = max(1, min(4, priority))
-                urgency = max(1, min(4, urgency))
-                importance = max(1, min(4, importance))
                 
                 created_at = datetime.now(timezone.utc)
                 
                 try:
-                    await conn.execute(
-                        """INSERT INTO tasks (id, user_id, title, description, priority, urgency, importance, 
-                               scheduled_date, scheduled_time, duration, status, expires_at, created_at)
-                               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)""",
-                        task_id, user["id"], title, description, priority, urgency, importance,
-                        date_obj, scheduled_time, duration, "scheduled", None, created_at
-                    )
+                    if impakt_exists:
+                        await conn.execute(
+                            """INSERT INTO tasks (id, user_id, title, description, priority, impakt, 
+                                   scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                            task_id, user["id"], title, description, priority, impakt_value,
+                            date_obj, scheduled_time, duration, "scheduled", None, created_at
+                        )
+                    else:
+                        # Fallback during migration: use importance integer
+                        impakt_to_int = {'low': 1, 'medium': 2, 'high': 3, None: 2}
+                        importance_value = impakt_to_int.get(impakt_value, 2)
+                        await conn.execute(
+                            """INSERT INTO tasks (id, user_id, title, description, priority, importance, 
+                                   scheduled_date, scheduled_time, duration, status, expires_at, created_at)
+                                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)""",
+                            task_id, user["id"], title, description, priority, importance_value,
+                            date_obj, scheduled_time, duration, "scheduled", None, created_at
+                        )
                     
                     created_tasks.append({
                         "id": task_id,
                         "title": title,
                         "description": description,
                         "priority": priority,
-                        "urgency": urgency,
-                        "importance": importance,
+                        "impakt": impakt_value,
                         "scheduled_date": date_obj.strftime("%Y-%m-%d"),  # Convert back to string for response
                         "scheduled_time": scheduled_time,
                         "duration": duration,
@@ -4775,8 +4939,8 @@ async def make_task_next(task_id: str, user: dict = Depends(get_current_user)):
                        WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'sort_order')"""
                 )
                 
-                # Build SELECT clause dynamically
-                base_fields = "id, user_id, title, description, priority, urgency, importance, scheduled_date::text, scheduled_time, duration, status, expires_at::text"
+                # Build SELECT clause using helper function
+                select_clause, _ = await build_task_select_clause(conn)
                 
                 # Add optional fields only if they exist
                 optional_fields = []
@@ -4792,15 +4956,16 @@ async def make_task_next(task_id: str, user: dict = Depends(get_current_user)):
                     optional_fields.append("sort_order")
                 
                 optional_fields.append("created_at::text")
+                expires_at_select = ", expires_at::text"
                 
-                select_fields = base_fields + (", " + ", ".join(optional_fields) if optional_fields else "")
+                select_fields = select_clause + expires_at_select + (", " + ", ".join(optional_fields) if optional_fields else "")
                 
                 updated_task = await conn.fetchrow(
                     f"SELECT {select_fields} FROM tasks WHERE id = $1 AND user_id = $2",
                     task_id, user["id"]
                 )
         
-        return dict(updated_task)
+        return convert_task_row_to_dict(updated_task)
     except HTTPException:
         raise
     except Exception as e:
@@ -4837,15 +5002,22 @@ async def move_task_to_inbox(task_id: str, user: dict = Depends(get_current_user
             task_id, user["id"]
         )
         
-        # Return the updated task
+        # Return the updated task using helper function
+        select_clause, _ = await build_task_select_clause(conn)
+        energy_required_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
+        )
+        energy_select = ", energy_required" if energy_required_exists else ""
+        expires_at_select = ", expires_at::text"
+        full_select = select_clause + energy_select + expires_at_select
+        
         updated_task = await conn.fetchrow(
-            """SELECT id, user_id, title, description, priority, urgency, importance, energy_required,
-               scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+            f"""SELECT {full_select}
                FROM tasks WHERE id = $1 AND user_id = $2""",
             task_id, user["id"]
         )
     
-    return dict(updated_task)
+    return convert_task_row_to_dict(updated_task)
 
 
 @api_router.post("/tasks/{task_id}/move-to-later")
@@ -4871,15 +5043,22 @@ async def move_task_to_later(task_id: str, user: dict = Depends(get_current_user
             expires_at, task_id, user["id"]
         )
         
-        # Return the updated task
+        # Return the updated task using helper function
+        select_clause, _ = await build_task_select_clause(conn)
+        energy_required_exists = await conn.fetchval(
+            """SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'tasks' AND column_name = 'energy_required')"""
+        )
+        energy_select = ", energy_required" if energy_required_exists else ""
+        expires_at_select = ", expires_at::text"
+        full_select = select_clause + energy_select + expires_at_select
+        
         updated_task = await conn.fetchrow(
-            """SELECT id, user_id, title, description, priority, urgency, importance, energy_required,
-               scheduled_date::text, scheduled_time, duration, status, expires_at::text, created_at::text
+            f"""SELECT {full_select}
                FROM tasks WHERE id = $1 AND user_id = $2""",
             task_id, user["id"]
         )
     
-    return dict(updated_task)
+    return convert_task_row_to_dict(updated_task)
 
 
 # ===== Dump (Transmission) System =====
@@ -4894,8 +5073,7 @@ class DumpItem(BaseModel):
     status: str = Field(default="new", description="Status: 'new', 'promoted', 'dismissed'")
     created_task_id: Optional[str] = None
     # Task attributes - same as Task model
-    urgency: int = Field(default=2, ge=1, le=4)
-    importance: int = Field(default=2, ge=1, le=4)
+    impakt: Optional[str] = Field(default=None)  # low, medium, high, or None
     priority: int = Field(default=2, ge=1, le=4)
     energy_required: Optional[str] = Field(default="medium")  # low, medium, high
     scheduled_date: Optional[str] = None  # ISO date string
@@ -4930,8 +5108,7 @@ class DumpItemUpdate(BaseModel):
     text: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
-    urgency: Optional[int] = None
-    importance: Optional[int] = None
+    impakt: Optional[str] = None  # low, medium, high, or None
     priority: Optional[int] = None
     energy_required: Optional[str] = None
     scheduled_date: Optional[str] = None

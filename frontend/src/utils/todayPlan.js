@@ -1,10 +1,12 @@
 /**
  * Suggest tasks for Today Plan (Next + Today Top 2)
- * Deterministic scoring based on priority, urgency, importance, and other factors
+ * Deterministic scoring based on priority, computed urgency, impakt, and other factors
  * @param {Array} tasks - Array of task objects
  * @param {Object} options - Options object (future use)
  * @returns {Object} - { nextTaskId: string|null, todayTaskIds: string[] }
  */
+import { computeUrgency } from "./urgency";
+
 export function suggestTodayPlan(tasks, options = {}) {
   if (!tasks || tasks.length === 0) {
     return { nextTaskId: null, todayTaskIds: [] };
@@ -39,10 +41,16 @@ export function suggestTodayPlan(tasks, options = {}) {
   const scoredTasks = candidates.map(task => {
     // Base score components
     const priority = task.priority || 2;
-    const urgency = task.urgency || 2;
-    const importance = task.importance || 2;
     
-    let score = priority * 100 + urgency * 25 + importance * 20;
+    // Compute urgency from scheduled_date/time
+    const urgency = computeUrgency(task);
+    const urgencyScore = urgency.rank === 99 ? 0 : (4 - urgency.rank) * 25; // Lower rank = higher urgency score
+    
+    // Map impakt to score (high=3, medium=2, low=1, null=0)
+    const impaktMap = { 'high': 3, 'medium': 2, 'low': 1, null: 0, undefined: 0 };
+    const impaktScore = (impaktMap[task.impakt] || 0) * 20;
+    
+    let score = priority * 100 + urgencyScore + impaktScore;
 
     // Duration bonus
     const duration = task.duration || 30;

@@ -17,10 +17,34 @@ import { motion, AnimatePresence } from "framer-motion";
 import TaskEditDialog from "./TaskEditDialog";
 
 const PRIORITY_CONFIG = {
-  4: { label: "Critical", color: "text-rose-400", bg: "bg-rose-500/10", border: "border-l-rose-500", icon: AlertCircle },
-  3: { label: "High", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-l-amber-500", icon: ArrowUp },
-  2: { label: "Medium", color: "text-primary", bg: "bg-primary/10", border: "border-l-primary", icon: ArrowRight },
-  1: { label: "Low", color: "text-muted-foreground", bg: "bg-muted/50", border: "border-l-muted-foreground", icon: ArrowDown },
+  4: { 
+    label: "Critical", 
+    color: "text-rose-600 dark:text-rose-400", 
+    bg: "bg-rose-100 dark:bg-rose-500/10", 
+    border: "border-l-rose-500", 
+    icon: AlertCircle 
+  },
+  3: { 
+    label: "High", 
+    color: "text-amber-900 dark:text-amber-400", 
+    bg: "bg-amber-200 dark:bg-amber-500/10", 
+    border: "border-l-amber-500", 
+    icon: ArrowUp 
+  },
+  2: { 
+    label: "Medium", 
+    color: "text-primary dark:text-primary", 
+    bg: "bg-primary/15 dark:bg-primary/10", 
+    border: "border-l-primary", 
+    icon: ArrowRight 
+  },
+  1: { 
+    label: "Low", 
+    color: "text-slate-600 dark:text-muted-foreground", 
+    bg: "bg-slate-100 dark:bg-muted/50", 
+    border: "border-l-muted-foreground", 
+    icon: ArrowDown 
+  },
 };
 
 const ITEM_HEIGHT = 100; // Height of each task card including margin
@@ -41,14 +65,10 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasks]);
   
-  // Sort tasks by priority - calculate from urgency + importance for accurate sorting
+  // Sort tasks by priority (directly from priority field)
   const sortedTasks = [...tasks].sort((a, b) => {
-    const priorityA = a.urgency && a.importance 
-      ? Math.round((parseInt(a.urgency) + parseInt(a.importance)) / 2)
-      : (a.priority || 2);
-    const priorityB = b.urgency && b.importance 
-      ? Math.round((parseInt(b.urgency) + parseInt(b.importance)) / 2)
-      : (b.priority || 2);
+    const priorityA = a.priority || 2;
+    const priorityB = b.priority || 2;
     return priorityB - priorityA;
   });
 
@@ -223,7 +243,7 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
                       {task.title}
                     </h3>
                     {task.description && (
-                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">
                         {task.description}
                       </p>
                     )}
@@ -271,7 +291,7 @@ export default function TaskInbox({ tasks, onUpdateTask, onDeleteTask }) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-8 w-8 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                      className="h-8 w-8 text-emerald-600 dark:text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-emerald-500/20 dark:hover:bg-emerald-500/10"
                       onClick={(e) => handleCompleteTask(e, task.id)}
                       data-testid={`complete-task-${task.id}`}
                       title="Mark as done"

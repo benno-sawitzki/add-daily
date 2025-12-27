@@ -90,7 +90,11 @@ export default function NextControlStrip({
         <Button
           onClick={handleHyperfocusToggle}
           size="lg"
-          className="flex-1 gap-2"
+          className={`flex-1 gap-2 ${
+            isHyperfocusRunning || isHyperfocusPaused 
+              ? "" 
+              : "bg-primary/80 hover:bg-primary/70 text-primary-foreground dark:bg-primary dark:hover:bg-primary/90"
+          }`}
           variant={isHyperfocusRunning || isHyperfocusPaused ? "outline" : "default"}
           disabled={isStarterRunning || isStarterPaused}
         >

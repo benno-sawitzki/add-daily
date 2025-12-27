@@ -8,6 +8,7 @@ import apiClient from "@/lib/apiClient";
 import { handleApiError } from "@/lib/apiErrorHandler";
 import { toast } from "sonner";
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
+import { useTheme } from "@/components/ThemeProvider";
 
 // ============================================
 // VU Meter Ring Component - Dramatic amplitude response
@@ -19,6 +20,16 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
   const glowLevelRef = useRef(0);
   const breathePhaseRef = useRef(0);
   const timeRef = useRef(Date.now());
+  const { theme } = useTheme();
+  
+  // Check if light mode is active - called on each frame to detect theme changes
+  const checkLightMode = () => {
+    if (typeof document === 'undefined') return false;
+    if (theme === 'light') return true;
+    if (theme === 'dark') return false;
+    // System theme - check class on document element
+    return document.documentElement.classList.contains('light');
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -74,6 +85,8 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
 
       // === Outer glow layer (dramatic expansion) ===
       if (isRecording || notRecordingBreath > 0) {
+        const isLight = checkLightMode();
+        const glowColor = isLight ? '147, 51, 234' : '244, 63, 94'; // purple-600 in light mode, rose-500 in dark mode
         const glowIntensity = Math.max(glowLevel, notRecordingBreath * 0.1);
         let outerGlowRadius = baseRadius + 15 + glowLevel * 35 + idleBreathAmount + notRecordingBreath;
         // Clamp to max radius to prevent clipping
@@ -83,10 +96,10 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
           centerX, centerY, outerGlowRadius + 20
         );
         const glowAlpha = Math.min(0.4, glowIntensity * 0.5 + 0.05);
-        outerGlow.addColorStop(0, `rgba(244, 63, 94, 0)`);
-        outerGlow.addColorStop(0.3, `rgba(244, 63, 94, ${glowAlpha * 0.6})`);
-        outerGlow.addColorStop(0.6, `rgba(244, 63, 94, ${glowAlpha * 0.3})`);
-        outerGlow.addColorStop(1, `rgba(244, 63, 94, 0)`);
+        outerGlow.addColorStop(0, `rgba(${glowColor}, 0)`);
+        outerGlow.addColorStop(0.3, `rgba(${glowColor}, ${glowAlpha * 0.6})`);
+        outerGlow.addColorStop(0.6, `rgba(${glowColor}, ${glowAlpha * 0.3})`);
+        outerGlow.addColorStop(1, `rgba(${glowColor}, 0)`);
         
         ctx.beginPath();
         ctx.arc(centerX, centerY, Math.min(outerGlowRadius + 20, maxRadius), 0, Math.PI * 2);
@@ -96,12 +109,14 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
 
       // === Secondary glow ring (mid layer) ===
       if (isRecording && glowLevel > 0.02) {
+        const isLight = checkLightMode();
+        const glowColor = isLight ? '147, 51, 234' : '244, 63, 94'; // purple-600 in light mode, rose-500 in dark mode
         let midGlowRadius = baseRadius + 8 + glowLevel * 25;
         // Clamp to max radius to prevent clipping
         midGlowRadius = Math.min(midGlowRadius, maxRadius - 5);
         ctx.beginPath();
         ctx.arc(centerX, centerY, midGlowRadius, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(244, 63, 94, ${glowLevel * 0.35})`;
+        ctx.strokeStyle = `rgba(${glowColor}, ${glowLevel * 0.35})`;
         ctx.lineWidth = 4 + glowLevel * 8;
         ctx.filter = "blur(8px)";
         ctx.stroke();
@@ -125,10 +140,12 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
 
       // Ring glow (blur effect) - more intense
       if ((isRecording && currentLevel > 0.02) || notRecordingBreath > 0) {
+        const isLight = checkLightMode();
+        const glowColor = isLight ? '147, 51, 234' : '244, 63, 94'; // purple-600 in light mode, rose-500 in dark mode
         ctx.beginPath();
         ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
         const blurAlpha = Math.max(currentLevel * 0.5, notRecordingBreath * 0.15);
-        ctx.strokeStyle = `rgba(244, 63, 94, ${blurAlpha})`;
+        ctx.strokeStyle = `rgba(${glowColor}, ${blurAlpha})`;
         ctx.lineWidth = ringThickness + 10 + currentLevel * 6;
         ctx.filter = "blur(6px)";
         ctx.stroke();
@@ -136,11 +153,13 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
       }
 
       // Main ring stroke
+      const isLight = checkLightMode();
+      const ringColor = isLight ? '147, 51, 234' : '244, 63, 94'; // purple-600 in light mode, rose-500 in dark mode
       ctx.beginPath();
       ctx.arc(centerX, centerY, ringRadius, 0, Math.PI * 2);
       ctx.strokeStyle = isRecording 
-        ? `rgba(244, 63, 94, ${ringAlpha})` 
-        : `rgba(244, 63, 94, ${0.2 + notRecordingBreath * 0.15})`;
+        ? `rgba(${ringColor}, ${ringAlpha})` 
+        : `rgba(${ringColor}, ${0.2 + notRecordingBreath * 0.15})`;
       ctx.lineWidth = ringThickness;
       ctx.lineCap = "round";
       ctx.stroke();
@@ -166,7 +185,7 @@ function VUMeterRing({ level = 0, isRecording = false, size = 160, containerSize
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [level, isRecording, size, containerSize]);
+  }, [level, isRecording, size, containerSize, theme]);
 
   return (
     <canvas
@@ -480,7 +499,7 @@ export default function VoiceOverlay({ onClose }) {
       className="voice-overlay flex flex-col items-center justify-center"
       data-testid="voice-overlay"
     >
-      <div className="absolute inset-0 bg-gradient-to-br from-background via-background to-primary/5" />
+      <div className="absolute inset-0 bg-gradient-to-br from-background/95 via-background/90 to-primary/10 dark:from-background/90 dark:via-background/85 dark:to-primary/5" />
 
       <Button
         variant="ghost"

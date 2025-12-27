@@ -93,7 +93,7 @@ function SortableTaskInSlot({ task, index, total, resizing, resizePreviewDuratio
 
   // Check if this task is currently being dragged
   const isBeingDragged = activeId === String(task.id);
-  
+
   const style = {
     transform: isBeingDragged 
       ? 'translateX(-9999px)' // Move off-screen when dragging to prevent blocking indicator
@@ -452,7 +452,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     
     // Prevent infinite loops by checking if inboxTasks actually changed
     // Compare by creating a stable string representation
-    const createTaskKey = (t) => `${t.id}-${t.priority}-${t.urgency}-${t.importance}-${t.energy_required || ''}-${t.duration}-${t.status}-${t.title}`;
+    const createTaskKey = (t) => `${t.id}-${t.priority}-${t.impakt || ''}-${t.energy_required || ''}-${t.duration}-${t.status}-${t.title}`;
     const prevTasksKey = prevInboxTasksRef.current.map(createTaskKey).join('|');
     const newTasksKey = inboxTasks.map(createTaskKey).join('|');
     
@@ -467,7 +467,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     lastProcessedInboxTasksRef.current = inboxTasks;
     
     // Only update local state if tasks actually changed
-    setLocalInboxTasks(inboxTasks);
+          setLocalInboxTasks(inboxTasks);
   }, [inboxTasks, isReordering]); // Only depend on inboxTasks and isReordering
 
   // Memoize getTasksForSlot to prevent recreation on every render
@@ -625,7 +625,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
     
     // Use setTimeout to defer state updates and prevent immediate re-renders
     setTimeout(() => {
-      setActiveId(null);
+    setActiveId(null);
       setOverId(null);
     }, 0);
 
@@ -727,43 +727,43 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
             .filter(t => t.scheduled_time?.substring(0, 5) === activeTimeSlot)
             .map(t => t.id);
           
-          const oldIndex = currentOrder.findIndex((id) => String(id) === activeId);
-          const newIndex = currentOrder.findIndex((id) => String(id) === overId);
-          
-          if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-            const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
-            setSlotTaskOrders((prev) => ({
-              ...prev,
-              [activeTimeSlot]: newOrder,
-            }));
+    const oldIndex = currentOrder.findIndex((id) => String(id) === activeId);
+    const newIndex = currentOrder.findIndex((id) => String(id) === overId);
 
-            // Update tasks via API - adjust scheduled_time slightly to maintain order
-            try {
-              const updates = newOrder.map((taskId, idx) => {
-                const task = dayTasks.find((t) => t.id === taskId);
-                if (!task || !task.scheduled_time) return null;
-                
-                const baseTime = task.scheduled_time.substring(0, 5);
-                const [hours, minutes] = baseTime.split(":").map(Number);
-                const totalMinutes = hours * 60 + minutes + idx * 0.1;
-                const newHours = Math.floor(totalMinutes / 60);
-                const newMins = Math.floor(totalMinutes % 60);
-                const newSecs = Math.floor((totalMinutes % 1) * 60);
-                const newTime = `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}:${String(newSecs).padStart(2, '0')}`;
-                
-                return onUpdateTask(taskId, { scheduled_time: newTime });
-              });
-              await Promise.all(updates.filter(Boolean));
-            } catch (error) {
-              console.error("Error reordering tasks:", error);
-              setSlotTaskOrders((prev) => ({
-                ...prev,
+    if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+      const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
+      setSlotTaskOrders((prev) => ({
+        ...prev,
+              [activeTimeSlot]: newOrder,
+      }));
+
+      // Update tasks via API - adjust scheduled_time slightly to maintain order
+      try {
+        const updates = newOrder.map((taskId, idx) => {
+          const task = dayTasks.find((t) => t.id === taskId);
+          if (!task || !task.scheduled_time) return null;
+          
+          const baseTime = task.scheduled_time.substring(0, 5);
+          const [hours, minutes] = baseTime.split(":").map(Number);
+          const totalMinutes = hours * 60 + minutes + idx * 0.1;
+          const newHours = Math.floor(totalMinutes / 60);
+          const newMins = Math.floor(totalMinutes % 60);
+          const newSecs = Math.floor((totalMinutes % 1) * 60);
+          const newTime = `${String(newHours).padStart(2, '0')}:${String(newMins).padStart(2, '0')}:${String(newSecs).padStart(2, '0')}`;
+          
+          return onUpdateTask(taskId, { scheduled_time: newTime });
+        });
+        await Promise.all(updates.filter(Boolean));
+      } catch (error) {
+        console.error("Error reordering tasks:", error);
+        setSlotTaskOrders((prev) => ({
+          ...prev,
                 [activeTimeSlot]: currentOrder,
-              }));
-            }
-          }
-          return;
-        }
+        }));
+      }
+    }
+      return;
+    }
       }
     }
   };
@@ -925,7 +925,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
             const isHourMark = time.endsWith(":00");
             const [hours] = time.split(":").map(Number);
             const slotTasks = getTasksForSlot(time);
-            const taskIds = slotTasks.map((t) => t.id);
+                  const taskIds = slotTasks.map((t) => t.id);
 
             return (
               <div
@@ -985,7 +985,7 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
       {completedTasks.length > 0 && (
               <div>
           <h3 className="text-lg font-medium text-muted-foreground mb-3 flex items-center gap-2">
-            <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+            <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-500" />
             Completed ({completedTasks.length})
           </h3>
           <div className="space-y-2">
@@ -1096,21 +1096,21 @@ export default function DailyCalendar({ tasks, onUpdateTask, onDeleteTask, onRef
           {activeTask ? (
             <div style={dragOverlayStyles}>
               {activeTask.status === "inbox" ? (
-                <SortableTaskCard
-                  task={activeTask}
-                  index={localInboxTasks.findIndex((t) => String(t.id) === String(activeId))}
-                  totalTasks={localInboxTasks.length}
-                  onUpdateTask={onUpdateTask}
-                  onDeleteTask={onDeleteTask}
-                  onScheduleTask={handleScheduleTask}
-                  onCompleteTask={handleCompleteTask}
-                  onMakeNext={null}
-                  onMoveToInbox={null}
-                  onMoveUp={handleMoveUp}
-                  onMoveDown={handleMoveDown}
-                  onClick={() => {}}
-                  isDragging={true}
-                />
+              <SortableTaskCard
+                task={activeTask}
+                index={localInboxTasks.findIndex((t) => String(t.id) === String(activeId))}
+                totalTasks={localInboxTasks.length}
+                onUpdateTask={onUpdateTask}
+                onDeleteTask={onDeleteTask}
+                onScheduleTask={handleScheduleTask}
+                onCompleteTask={handleCompleteTask}
+                onMakeNext={null}
+                onMoveToInbox={null}
+                onMoveUp={handleMoveUp}
+                onMoveDown={handleMoveDown}
+                onClick={() => {}}
+                isDragging={true}
+              />
               ) : (
                 // Calendar task overlay - simplified version with translucency
                 <div

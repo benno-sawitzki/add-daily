@@ -212,8 +212,7 @@ export default function FocusScreen({
           title: text.trim(),
           description: "",
           priority: 2,
-          urgency: 2,
-          importance: 2,
+          impakt: null,
           duration: 30,
           status: "inbox",
         });

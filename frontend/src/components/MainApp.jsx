@@ -14,6 +14,8 @@ import {
   DropdownMenuTrigger,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
 } from "@/components/ui/dropdown-menu";
 import {
   Sheet,
@@ -36,6 +38,10 @@ import {
   Archive,
   Settings,
   Menu,
+  Monitor,
+  Moon,
+  Sun,
+  Keyboard,
 } from "lucide-react";
 import InboxSplitView from "@/components/InboxSplitView";
 import WeeklyCalendar from "@/components/WeeklyCalendar";
@@ -49,7 +55,9 @@ import CommandCenter from "@/components/CommandCenter";
 import DebugPanel from "@/components/DebugPanel";
 import HyperRecordButton from "@/components/HyperRecordButton";
 import SettingsPage from "@/components/SettingsPage";
+import KeyboardShortcutsDialog from "@/components/KeyboardShortcutsDialog";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/components/ThemeProvider";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 
 // API client is now centralized in @/lib/apiClient
@@ -58,6 +66,7 @@ import { useNavigate, useLocation, Outlet } from "react-router-dom";
 
 function MainApp() {
   const { user, logout } = useAuth();
+  const { theme, setTheme } = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [tasks, setTasks] = useState([]);
@@ -95,8 +104,12 @@ function MainApp() {
     setActiveView(view);
     // Close mobile menu when route changes
     setMobileMenuOpen(false);
+    // Prevent scroll jumps on navigation - scroll to top instantly (no animation)
+    window.scrollTo({ top: 0, behavior: 'instant' });
   }, [location.pathname]);
+  
   const [isVoiceActive, setIsVoiceActive] = useState(false);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
   const [isBraindumpHovering, setIsBraindumpHovering] = useState(false);
   const [settings, setSettings] = useState({
     ai_provider: "openai",
@@ -117,6 +130,89 @@ function MainApp() {
   // Track last shown error toast to prevent duplicates
   const lastErrorToastRef = useRef({ message: null, timestamp: 0 });
   const TOAST_DEBOUNCE_MS = 5000; // Don't show same error within 5 seconds
+
+  // Global keyboard shortcuts - use Option/Alt to avoid browser conflicts
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Don't trigger if user is typing in an input, textarea, or contenteditable
+      const target = e.target;
+      const isInput = target.tagName === 'INPUT' || 
+                     target.tagName === 'TEXTAREA' || 
+                     target.isContentEditable;
+      
+      if (isInput) {
+        return; // Let inputs handle their own shortcuts
+      }
+
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const modKey = isMac ? e.metaKey : e.ctrlKey;
+      const altKey = e.altKey;
+      const shiftKey = e.shiftKey;
+
+      // Navigation shortcuts: Option+1-5 (Mac) or Alt+1-5 (Windows/Linux)
+      // Using Option/Alt avoids browser tab switching conflicts
+      if (altKey && !modKey && !shiftKey && ['1', '2', '3', '4', '5'].includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        const routes = {
+          '1': '/app/inbox',
+          '2': '/app/daily',
+          '3': '/app/weekly',
+          '4': '/app/completed',
+          '5': '/app/dumps',
+        };
+        const route = routes[e.key.toLowerCase()];
+        if (route) {
+          navigate(route);
+        }
+        return;
+      }
+
+      // Option+N: Create new task (Mac) or Alt+N (Windows/Linux)
+      if (altKey && !modKey && !shiftKey && e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        // TODO: Open new task dialog
+        return;
+      }
+
+      // Option+B: Open Braindump (Mac) or Alt+B (Windows/Linux)
+      if (altKey && !modKey && !shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        setIsVoiceActive(true);
+        return;
+      }
+
+      // Option+K: Command palette (Mac) or Alt+K (Windows/Linux)
+      if (altKey && !modKey && !shiftKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        // TODO: Open command palette
+        return;
+      }
+
+      // Cmd+/ or Ctrl+/: Show keyboard shortcuts (this one usually works)
+      if (modKey && !altKey && !shiftKey && e.key === '/') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        setShowKeyboardShortcuts(true);
+        return;
+      }
+    };
+
+    // Use capture phase to intercept before browser handles it
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, { capture: true });
+    };
+  }, [navigate, setIsVoiceActive, setShowKeyboardShortcuts]);
 
   const fetchTasks = useCallback(async () => {
     if (!user?.id) {
@@ -299,20 +395,7 @@ function MainApp() {
     const isCompleting = updates.status === 'completed';
     const isUncompleting = currentTask?.status === 'completed' && updates.status && updates.status !== 'completed';
     
-    // Debug logging
-    console.log('[MainApp.updateTask] Update request:', {
-      taskId,
-      updates,
-      currentTask: currentTask ? {
-        id: currentTask.id,
-        title: currentTask.title,
-        duration: currentTask.duration,
-        urgency: currentTask.urgency,
-        importance: currentTask.importance,
-        energy_required: currentTask.energy_required,
-        priority: currentTask.priority,
-      } : null,
-    });
+    // Removed debug logging for performance
     
     // Optimistic update: update UI immediately for better UX
     setTasks(prevTasks => 
@@ -324,16 +407,7 @@ function MainApp() {
     try {
       const response = await apiClient.patch(`/tasks/${taskId}`, updates);
       
-      // Debug logging for response
-      console.log('[MainApp.updateTask] API response:', {
-        taskId,
-        responseData: response.data,
-        responseFields: response.data ? Object.keys(response.data) : null,
-        hasDuration: response.data?.duration !== undefined,
-        hasUrgency: response.data?.urgency !== undefined,
-        hasImportance: response.data?.importance !== undefined,
-        hasEnergy: response.data?.energy_required !== undefined,
-      });
+      // Removed debug logging for performance
       
       // Update with server response (more accurate, includes computed fields)
       // Merge with existing task to ensure all fields are preserved, then override with server response
@@ -346,24 +420,7 @@ function MainApp() {
               ...task,  // Preserve existing fields
               ...response.data,  // Override with server response (which has all updated fields)
             };
-            console.log('[MainApp.updateTask] Replacing task in state:', {
-              oldTask: {
-                id: task.id,
-                duration: task.duration,
-                urgency: task.urgency,
-                importance: task.importance,
-                energy_required: task.energy_required,
-                priority: task.priority,
-              },
-              newTask: {
-                id: updatedTask.id,
-                duration: updatedTask.duration,
-                urgency: updatedTask.urgency,
-                importance: updatedTask.importance,
-                energy_required: updatedTask.energy_required,
-                priority: updatedTask.priority,
-              },
-            });
+            // Removed debug logging for performance
             return updatedTask;
           }
           return task;
@@ -1103,6 +1160,26 @@ function MainApp() {
                   <Settings className="w-4 h-4" />
                   Settings
                 </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setShowKeyboardShortcuts(true)} className="gap-2">
+                  <Keyboard className="w-4 h-4" />
+                  Keyboard Shortcuts
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel>Theme</DropdownMenuLabel>
+                <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>
+                  <DropdownMenuRadioItem value="light" className="gap-2">
+                    <Sun className="w-4 h-4" />
+                    Light
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="dark" className="gap-2">
+                    <Moon className="w-4 h-4" />
+                    Dark
+                  </DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="system" className="gap-2">
+                    <Monitor className="w-4 h-4" />
+                    System
+                  </DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => { logout(); navigate('/'); }} className="gap-2 text-red-500 focus:text-red-500">
                   <LogOut className="w-4 h-4" />
@@ -1229,10 +1306,10 @@ function MainApp() {
             />
           </TabsContent>
 
-          <TabsContent value="completed" data-testid="completed-view">
+          <TabsContent value="completed" data-testid="completed-view" className="min-h-0">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6">
               {/* Left: Completed Tasks List (8 columns) */}
-              <div className="lg:col-span-8">
+              <div className="lg:col-span-8 min-h-0">
                 <CompletedTasks
                   tasks={completedTasks}
                   onRestoreTask={updateTask}
@@ -1318,7 +1395,13 @@ function MainApp() {
       />
       
       {/* Debug Panel - shows API calls in dev mode */}
-      <DebugPanel />
+      {/* <DebugPanel /> */}
+
+      {/* Keyboard Shortcuts Dialog */}
+      <KeyboardShortcutsDialog
+        open={showKeyboardShortcuts}
+        onOpenChange={setShowKeyboardShortcuts}
+      />
     </Tabs>
   );
 }

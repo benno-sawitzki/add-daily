@@ -19,23 +19,42 @@ import apiClient from "@/lib/apiClient";
 import { toast } from "sonner";
 
 const PRIORITY_CONFIG = {
-  4: { label: "Critical", color: "text-rose-400", bg: "bg-rose-500/10", border: "border-l-rose-500", icon: AlertCircle },
-  3: { label: "High", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-l-amber-500", icon: ArrowUp },
-  2: { label: "Medium", color: "text-primary", bg: "bg-primary/10", border: "border-l-primary", icon: ArrowRight },
-  1: { label: "Low", color: "text-muted-foreground", bg: "bg-muted/50", border: "border-l-muted-foreground", icon: ArrowDown },
+  4: { 
+    label: "Critical", 
+    color: "text-rose-600 dark:text-rose-400", 
+    bg: "bg-rose-100 dark:bg-rose-500/10", 
+    border: "border-l-rose-500", 
+    icon: AlertCircle 
+  },
+  3: { 
+    label: "High", 
+    color: "text-amber-900 dark:text-amber-400", 
+    bg: "bg-amber-200 dark:bg-amber-500/10", 
+    border: "border-l-amber-500", 
+    icon: ArrowUp 
+  },
+  2: { 
+    label: "Medium", 
+    color: "text-primary dark:text-primary", 
+    bg: "bg-primary/15 dark:bg-primary/10", 
+    border: "border-l-primary", 
+    icon: ArrowRight 
+  },
+  1: { 
+    label: "Low", 
+    color: "text-slate-600 dark:text-muted-foreground", 
+    bg: "bg-slate-100 dark:bg-muted/50", 
+    border: "border-l-muted-foreground", 
+    icon: ArrowDown 
+  },
 };
 
 export default function DumpItemCard({ item, onUpdate, onDelete }) {
   const [editingItem, setEditingItem] = useState(null);
   const [scheduleMenuOpen, setScheduleMenuOpen] = useState(false);
 
-  // Calculate priority from urgency + importance
-  const calculatedPriority = item.urgency && item.importance 
-    ? Math.round((parseInt(item.urgency) + parseInt(item.importance)) / 2)
-    : (item.priority || 2);
-  const displayPriority = item.priority && item.priority !== calculatedPriority 
-    ? item.priority 
-    : calculatedPriority;
+  // Use priority directly (no calculation from urgency/importance)
+  const displayPriority = item.priority || 2;
   const priorityConfig = PRIORITY_CONFIG[displayPriority] || PRIORITY_CONFIG[2];
   const PriorityIcon = priorityConfig.icon;
 
@@ -48,9 +67,8 @@ export default function DumpItemCard({ item, onUpdate, onDelete }) {
     id: item.id,
     title: item.text || '',
     description: item.description || '',
-    urgency: item.urgency || 2,
-    importance: item.importance || 2,
-    priority: item.priority || calculatedPriority,
+    impakt: item.impakt || null,
+    priority: item.priority || 2,
     energy_required: item.energy_required || 'medium',
     scheduled_date: item.scheduled_date || null,
     scheduled_time: item.scheduled_time || '',
@@ -64,8 +82,7 @@ export default function DumpItemCard({ item, onUpdate, onDelete }) {
       const dumpItemUpdates = {
         text: updates.title, // Map title to text
         description: updates.description,
-        urgency: updates.urgency,
-        importance: updates.importance,
+        impakt: updates.impakt,
         priority: updates.priority,
         energy_required: updates.energy_required,
         scheduled_date: updates.scheduled_date,
@@ -140,7 +157,7 @@ export default function DumpItemCard({ item, onUpdate, onDelete }) {
       <Card
         className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all cursor-pointer ${
           isPromoted 
-            ? 'bg-emerald-500/10 border-emerald-500' 
+            ? 'bg-emerald-500/20 dark:bg-emerald-500/10 border-emerald-500' 
             : isDismissed
               ? 'opacity-60 bg-muted/30'
               : ''
@@ -158,7 +175,7 @@ export default function DumpItemCard({ item, onUpdate, onDelete }) {
             <div className="flex items-center gap-2 mb-1">
               <span className={`text-xs px-2 py-0.5 rounded-full ${
                 status === 'promoted'
-                  ? 'bg-emerald-500/20 text-emerald-500'
+                  ? 'bg-emerald-500/30 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-500'
                   : status === 'dismissed'
                     ? 'bg-gray-500/20 text-gray-500'
                     : 'bg-blue-500/20 text-blue-500'
@@ -280,7 +297,7 @@ export default function DumpItemCard({ item, onUpdate, onDelete }) {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-8 w-8 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                    className="h-8 w-8 text-emerald-600 dark:text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-emerald-500/20 dark:hover:bg-emerald-500/10"
                     onClick={(e) => {
                       e.stopPropagation();
                       handlePromoteItem();

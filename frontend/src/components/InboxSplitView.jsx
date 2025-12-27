@@ -46,7 +46,14 @@ export default function InboxSplitView({
       // Check both inbox and next tasks
       const updatedTask = [...inboxTasks, ...nextTasks].find(t => t.id === editingTask.id);
       if (updatedTask) {
-        setEditingTask(updatedTask);
+        // Always update to ensure we have the latest data (especially for description)
+        // Compare description to detect changes
+        const descriptionChanged = updatedTask.description !== editingTask.description;
+        const titleChanged = updatedTask.title !== editingTask.title;
+        // Update if any field changed (always update to get latest from server)
+        if (descriptionChanged || titleChanged || JSON.stringify(updatedTask) !== JSON.stringify(editingTask)) {
+          setEditingTask(updatedTask);
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -65,28 +72,29 @@ export default function InboxSplitView({
         localInboxTasks.some((task) => {
           const newTask = inboxTasks.find(t => t.id === task.id);
           if (!newTask) return true; // Task removed
-          // Check if any fields changed (compare key fields including energy_required)
+          // Check if any fields changed (compare key fields including description and energy_required)
           return JSON.stringify({
             priority: task.priority,
-            urgency: task.urgency,
-            importance: task.importance,
+            impakt: task.impakt,
             energy_required: task.energy_required,
             duration: task.duration,
             status: task.status,
             title: task.title,
+            description: task.description || "", // Include description in comparison
           }) !== JSON.stringify({
             priority: newTask.priority,
-            urgency: newTask.urgency,
-            importance: newTask.importance,
+            impakt: newTask.impakt,
             energy_required: newTask.energy_required,
             duration: newTask.duration,
             status: newTask.status,
             title: newTask.title,
+            description: newTask.description || "", // Include description in comparison
           });
         }) || inboxTasks.some((task) => !localInboxTasks.find(t => t.id === task.id)); // New task added
       
-      // Only update if IDs differ (new tasks added/removed) or if order changed significantly OR if task fields changed
-      if (currentIds !== newIds || tasksChanged) {
+      // Always update if task fields changed, or if IDs/order changed
+      // This ensures description and other field changes are reflected immediately
+      if (tasksChanged || currentIds !== newIds) {
         // Check if it's just a reorder of the same tasks (avoid double-apply)
         const currentIdSet = new Set(localInboxTasks.map(t => t.id));
         const newIdSet = new Set(inboxTasks.map(t => t.id));
@@ -312,16 +320,28 @@ export default function InboxSplitView({
         }
       }
     } else {
-      // Update existing task
-      await onUpdateTask(taskId, taskData);
-      
-      // If priority changed and task is in inbox, refresh to reorder
-      if (taskData.priority !== undefined && taskData.status === "inbox") {
-        await onRefreshTasks();
-      } else {
-        // For other updates, still refresh to get latest state
-        await onRefreshTasks();
+      // Immediately update editingTask with the new data to reflect changes in the dialog
+      // This ensures the dialog shows the updated description without needing to navigate away
+      if (editingTask && editingTask.id === taskId) {
+        setEditingTask({
+          ...editingTask,
+          ...taskData,
+        });
       }
+      
+      // Update existing task - don't await for faster UI response
+      // Note: onUpdateTask already handles optimistic updates and state refresh
+      onUpdateTask(taskId, taskData).then(() => {
+        // After save completes, refresh tasks to ensure UI shows latest data
+        // This runs in background, doesn't block dialog closing
+        if (onRefreshTasks) {
+          onRefreshTasks().catch((error) => {
+            console.error('[InboxSplitView.handleSaveTask] Refresh failed:', error);
+          });
+        }
+      }).catch((error) => {
+        console.error('[InboxSplitView.handleSaveTask] Update failed:', error);
+      });
     }
   };
 

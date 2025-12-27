@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Select,
   SelectContent,
@@ -26,144 +26,10 @@ export default function CommandCenter({
     nextTodayCount: nextTasks.length,
     focusCount: focusTasks.length,
   });
-  const [loading, setLoading] = useState(false);
+  const isFirstLoadRef = useRef(true);
   // Removed metricsError state - errors are logged to console only
 
-  // Fetch metrics when range changes or refreshTrigger changes
-  useEffect(() => {
-    if (!userId) {
-      // Reset to defaults if no user
-      setMetrics({
-        done: 0,
-        focusSessions: 0,
-        deepWorkMinutes: 0,
-        nextTodayCount: nextTasks.length,
-        focusCount: focusTasks.length,
-      });
-      return;
-    }
-    
-    const fetchMetrics = async () => {
-      setLoading(true);
-      try {
-        const { start, end } = getRangeBounds(range);
-        
-        // Fetch done tasks count - don't throw on error
-        let doneCount = 0;
-        try {
-          // Send full ISO datetime strings to backend to preserve timezone information
-          // The backend can handle both YYYY-MM-DD and full ISO strings
-          const startDate = start.split('T')[0];
-          const endDate = end.split('T')[0];
-          
-          console.log('[CommandCenter] Fetching done metrics:', { 
-            start: startDate, 
-            end: endDate, 
-            range,
-            startISO: start,
-            endISO: end
-          });
-          
-          // Try sending full ISO strings first (backend handles both formats)
-          const doneResponse = await apiClient.get('/metrics/done', {
-            params: { start: start, end: end },
-          });
-          doneCount = doneResponse.data.count || 0;
-          
-          console.log('[CommandCenter] Done metrics response:', { 
-            count: doneCount, 
-            error: doneResponse.data._error,
-            fullResponse: doneResponse.data,
-            debug: doneResponse.data._debug
-          });
-          
-          // If we have debug info, log it prominently
-          if (doneResponse.data._debug) {
-            console.log('🔍 [CommandCenter] Debug info:', doneResponse.data._debug);
-          }
-          
-          // Log error if present in response (console only, no UI display)
-          if (doneResponse.data._error) {
-            console.error("❌ [CommandCenter] Metrics done returned error:", doneResponse.data._error);
-            // In development, also log to console with more visibility
-            if (process.env.NODE_ENV === 'development') {
-              console.error("Metrics endpoint error details:", {
-                error: doneResponse.data._error,
-                start: startDate,
-                end: endDate,
-                range
-              });
-            }
-          }
-        } catch (error) {
-          const errorDetails = {
-            message: error.message,
-            response: error.response?.data,
-            status: error.response?.status,
-          };
-          console.error("❌ [CommandCenter] Failed to fetch done metrics:", errorDetails);
-          doneCount = 0;
-          
-          // In development, log full error details
-          if (process.env.NODE_ENV === 'development') {
-            console.error("Full error details:", {
-              error: errorDetails,
-              start: start.split('T')[0],
-              end: end.split('T')[0],
-              range
-            });
-          }
-        }
-        
-        // Fetch focus sessions - don't throw on error
-        let focusCount = 0;
-        let deepWorkMinutes = 0;
-        try {
-          // Convert ISO date strings to YYYY-MM-DD format for backend
-          const startDate = start.split('T')[0];
-          const endDate = end.split('T')[0];
-          
-          const focusResponse = await apiClient.get('/metrics/focus', {
-            params: { start: startDate, end: endDate },
-          });
-          focusCount = focusResponse.data.count || 0;
-          deepWorkMinutes = focusResponse.data.totalMinutes || 0;
-          
-          // Log error if present in response (console only, no UI display)
-          if (focusResponse.data._error) {
-            console.warn("Metrics focus returned error:", focusResponse.data._error);
-          }
-        } catch (error) {
-          const errorDetails = {
-            message: error.message,
-            response: error.response?.data,
-            status: error.response?.status,
-          };
-          console.warn("Failed to fetch focus metrics (non-blocking):", errorDetails);
-          focusCount = 0;
-          deepWorkMinutes = 0;
-        }
-        
-        setMetrics({
-          done: doneCount,
-          focusSessions: focusCount,
-          deepWorkMinutes: deepWorkMinutes,
-          nextTodayCount: nextTasks.length,
-          focusCount: focusTasks.length,
-        });
-      } catch (error) {
-        // This should never happen, but if it does, log and continue
-        console.error("Unexpected error in fetchMetrics:", error);
-        // Don't show toast - metrics are non-critical
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    fetchMetrics();
-  }, [range, userId, nextTasks.length, focusTasks.length, refreshTrigger]);
-
-  // Update Next Today and Focus counts when they change
+  // Update Next Today and Focus counts immediately when they change (no API call needed)
   useEffect(() => {
     setMetrics(prev => ({
       ...prev,
@@ -171,6 +37,103 @@ export default function CommandCenter({
       focusCount: focusTasks.length,
     }));
   }, [nextTasks.length, focusTasks.length]);
+
+  // Fetch metrics when range changes or refreshTrigger changes
+  useEffect(() => {
+    if (!userId) {
+      // Only reset if this is the first load, otherwise keep previous values
+      if (isFirstLoadRef.current) {
+        setMetrics(prev => ({
+          ...prev,
+          done: 0,
+          focusSessions: 0,
+          deepWorkMinutes: 0,
+        }));
+      }
+      return;
+    }
+    
+    const fetchMetrics = async () => {
+      // Never set loading state - always keep previous values visible
+      // This prevents the jarring "—" to value jump
+      
+      try {
+        const { start, end } = getRangeBounds(range);
+        const startDate = start.split('T')[0];
+        const endDate = end.split('T')[0];
+        
+        // Make both API calls in parallel for faster loading
+        const [doneResponse, focusResponse] = await Promise.allSettled([
+          // Fetch done tasks count
+          apiClient.get('/metrics/done', {
+            params: { start: start, end: end },
+          }).catch(error => {
+            const errorDetails = {
+              message: error.message,
+              response: error.response?.data,
+              status: error.response?.status,
+            };
+            console.error("❌ [CommandCenter] Failed to fetch done metrics:", errorDetails);
+            return { data: { count: 0, _error: errorDetails } };
+          }),
+          
+          // Fetch focus sessions
+          apiClient.get('/metrics/focus', {
+            params: { start: startDate, end: endDate },
+          }).catch(error => {
+            const errorDetails = {
+              message: error.message,
+              response: error.response?.data,
+              status: error.response?.status,
+            };
+            console.warn("Failed to fetch focus metrics (non-blocking):", errorDetails);
+            return { data: { count: 0, totalMinutes: 0, _error: errorDetails } };
+          }),
+        ]);
+        
+        // Extract results
+        let doneCount = 0;
+        if (doneResponse.status === 'fulfilled') {
+          const response = doneResponse.value;
+          doneCount = response.data?.count || 0;
+          
+          if (response.data?._error) {
+            console.error("❌ [CommandCenter] Metrics done returned error:", response.data._error);
+          }
+          if (response.data?._debug) {
+            console.log('🔍 [CommandCenter] Debug info:', response.data._debug);
+          }
+        }
+        
+        let focusCount = 0;
+        let deepWorkMinutes = 0;
+        if (focusResponse.status === 'fulfilled') {
+          const response = focusResponse.value;
+          focusCount = response.data?.count || 0;
+          deepWorkMinutes = response.data?.totalMinutes || 0;
+          
+          if (response.data?._error) {
+            console.warn("Metrics focus returned error:", response.data._error);
+          }
+        }
+        
+        setMetrics(prev => ({
+          ...prev,
+          done: doneCount,
+          focusSessions: focusCount,
+          deepWorkMinutes: deepWorkMinutes,
+        }));
+        
+        isFirstLoadRef.current = false;
+      } catch (error) {
+        // This should never happen, but if it does, log and continue
+        console.error("Unexpected error in fetchMetrics:", error);
+        // Don't show toast - metrics are non-critical
+      }
+    };
+    
+    fetchMetrics();
+  }, [range, userId, refreshTrigger]);
 
   const handleEnergyChange = async (value) => {
     if (onEnergyChange) {
@@ -198,8 +161,8 @@ export default function CommandCenter({
         </p>
       </div>
 
-      {/* Range Selector */}
-      <div>
+      {/* Range Selector - aligned with task cards in Inbox/Next Today columns */}
+      <div className="-mt-8">
         <Tabs value={range} onValueChange={setRange} className="w-full">
           <TabsList className="grid w-full grid-cols-4 h-9">
             <TabsTrigger value="today" className="text-xs px-2">Today</TabsTrigger>
@@ -214,19 +177,19 @@ export default function CommandCenter({
       <div className="grid grid-cols-2 gap-6">
         <MetricCard 
           label="Done" 
-          value={loading ? "—" : metrics.done} 
+          value={metrics.done} 
         />
         <MetricCard 
           label="Focus" 
-          value={loading ? "—" : `${metrics.focusCount}/1`} 
+          value={`${metrics.focusCount}/1`} 
         />
         <MetricCard 
           label="Deep Work" 
-          value={loading ? "—" : `${metrics.deepWorkMinutes}m`} 
+          value={`${metrics.deepWorkMinutes}m`} 
         />
         <MetricCard 
           label="Next Today" 
-          value={`${metrics.nextTodayCount}/5`} 
+          value={`${metrics.nextTodayCount}/1`} 
         />
       </div>
 
@@ -253,13 +216,16 @@ export default function CommandCenter({
 }
 
 function MetricCard({ label, value }) {
+  // Ensure value is always a string or number, never undefined
+  const displayValue = value !== undefined && value !== null ? String(value) : "0";
+  
   return (
     <div className="flex flex-col gap-1">
       <p className="text-[11px] font-medium text-muted-foreground/70 uppercase tracking-wide">
         {label}
       </p>
       <p className="text-[32px] font-semibold text-foreground leading-none">
-        {value}
+        {displayValue}
       </p>
     </div>
   );

@@ -2,6 +2,7 @@ import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Popover,
   PopoverContent,
@@ -28,18 +29,55 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useState, useRef, useEffect } from "react";
+import { computeUrgency, getUrgencyBadgeClasses } from "@/utils/urgency";
 
 const PRIORITY_CONFIG = {
-  4: { label: "Critical", color: "text-rose-400", bg: "bg-rose-500/10", border: "border-l-rose-500", icon: AlertCircle },
-  3: { label: "High", color: "text-amber-400", bg: "bg-amber-500/10", border: "border-l-amber-500", icon: ArrowUp },
-  2: { label: "Medium", color: "text-primary", bg: "bg-primary/10", border: "border-l-primary", icon: ArrowRight },
-  1: { label: "Low", color: "text-muted-foreground", bg: "bg-muted/50", border: "border-l-muted-foreground", icon: ArrowDown },
+  4: { 
+    label: "Critical", 
+    color: "text-rose-600 dark:text-rose-400", 
+    bg: "bg-rose-100 dark:bg-rose-500/10", 
+    border: "border-l-rose-500", 
+    icon: AlertCircle 
+  },
+  3: { 
+    label: "High", 
+    color: "text-amber-900 dark:text-amber-400", 
+    bg: "bg-amber-200 dark:bg-amber-500/10", 
+    border: "border-l-amber-500", 
+    icon: ArrowUp 
+  },
+  2: { 
+    label: "Medium", 
+    color: "text-primary dark:text-primary", 
+    bg: "bg-primary/15 dark:bg-primary/10", 
+    border: "border-l-primary", 
+    icon: ArrowRight 
+  },
+  1: { 
+    label: "Low", 
+    color: "text-slate-600 dark:text-muted-foreground", 
+    bg: "bg-slate-100 dark:bg-muted/50", 
+    border: "border-l-muted-foreground", 
+    icon: ArrowDown 
+  },
 };
 
 const ENERGY_CONFIG = {
-  low: { label: "⚡", color: "bg-slate-500/20 text-slate-300", fullLabel: "Low" },
-  medium: { label: "⚡⚡", color: "bg-blue-500/20 text-blue-300", fullLabel: "Medium" },
-  high: { label: "⚡⚡⚡", color: "bg-purple-500/20 text-purple-300", fullLabel: "High" },
+  low: { 
+    label: "⚡", 
+    color: "bg-slate-200 dark:bg-slate-500/20 text-slate-800 dark:text-slate-300 border border-slate-400 dark:border-slate-500/30 font-semibold", 
+    fullLabel: "Low" 
+  },
+  medium: { 
+    label: "⚡⚡", 
+    color: "bg-blue-300 dark:bg-blue-500/20 text-blue-900 dark:text-blue-300 border border-blue-400 dark:border-blue-500/30 font-semibold", 
+    fullLabel: "Medium" 
+  },
+  high: { 
+    label: "⚡⚡⚡", 
+    color: "bg-purple-300 dark:bg-purple-500/20 text-purple-900 dark:text-purple-300 border border-purple-400 dark:border-purple-500/30 font-semibold", 
+    fullLabel: "High" 
+  },
 };
 
 // Activation delay constants - must match activationConstraint in dndConfig.js
@@ -206,11 +244,14 @@ export default function SortableTaskCard({
   const style = {
     transform: CSS.Transform.toString(transform),
     transition,
-    opacity: isSortableDragging ? 0.4 : 1,
+    opacity: isSortableDragging ? 0 : 1, // Completely hide when dragging to avoid conflicts with DragOverlay
   };
 
   const priorityConfig = PRIORITY_CONFIG[task.priority] || PRIORITY_CONFIG[2];
   const PriorityIcon = priorityConfig.icon;
+  
+  // Compute urgency from scheduled_date/time
+  const urgency = computeUrgency(task);
 
   // HTML5 drag handlers for cross-component dragging (e.g., inbox to calendar)
   // Note: We enable HTML5 drag alongside dnd-kit. dnd-kit handles reordering within the inbox,
@@ -335,13 +376,18 @@ export default function SortableTaskCard({
           setNodeRef(node);
           cardRef.current = node;
           // Set activator node ref to the card itself for drag-from-anywhere
-          setActivatorNodeRef(node);
+          // Only set if not in drag overlay (isDragging prop)
+          if (!isDragging) {
+            setActivatorNodeRef(node);
+          }
         }}
-        {...attributes}
-        {...listeners}
+        {...(!isDragging ? attributes : {})}
+        {...(!isDragging ? listeners : {})}
         draggable={false}
-        onPointerDownCapture={handlePointerDownCapture}
-        className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all cursor-grab active:cursor-grabbing ${
+        onPointerDownCapture={!isDragging ? handlePointerDownCapture : undefined}
+        className={`task-card group p-4 border-l-4 ${priorityConfig.border} bg-card/50 hover:bg-card transition-all ${
+          isDragging ? "cursor-grabbing" : "cursor-grab active:cursor-grabbing"
+        } ${
           isSortableDragging ? "border-dashed border-primary/50 bg-primary/5" : ""
         } ${showPulse && !isActivated ? "hold-pulse" : ""}`}
         data-testid={`task-card-${task.id}`}
@@ -443,17 +489,25 @@ export default function SortableTaskCard({
                 {task.title}
               </h3>
               {task.description ? (
-                <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                <p className="text-sm text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">
                   {task.description}
                 </p>
               ) : (
                 <div className="h-5 mt-1" />
               )}
             </div>
-            <div className="flex items-center gap-3 mt-3">
-              <span className={`text-xs px-2 py-1 rounded-full ${priorityConfig.bg} ${priorityConfig.color}`}>
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
+              {/* Impakt (Priority) - Badge style */}
+              <Badge variant="outline" className={`${priorityConfig.bg} ${priorityConfig.color} border-current/20 text-xs`}>
                 {priorityConfig.label}
-              </span>
+              </Badge>
+              {/* Urgency - Badge style */}
+              {urgency.label && (
+                <Badge variant="outline" className={`${getUrgencyBadgeClasses(urgency.status)} text-xs`}>
+                  {urgency.label}
+                </Badge>
+              )}
+              {/* Energy - Selector with lightning bolts */}
               <Select
                 key={`energy-${task.id}-${task.energy_required || 'medium'}`}
                 value={task.energy_required || "medium"}
@@ -464,31 +518,23 @@ export default function SortableTaskCard({
                 }}
               >
                 <SelectTrigger 
-                  className="h-auto p-0 border-none shadow-none hover:opacity-80 focus:ring-0 focus:ring-offset-0 bg-transparent w-auto min-w-0"
+                  className="h-auto p-1.5 border border-border/50 shadow-none hover:opacity-80 focus:ring-0 focus:ring-offset-0 bg-transparent w-auto min-w-0 text-xs"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <SelectValue>
                     {(() => {
                       const energyValue = task.energy_required || "medium";
-                      const config = ENERGY_CONFIG[energyValue] || ENERGY_CONFIG.medium;
-                      return (
-                        <span className={`text-xs px-2 py-1 rounded-full ${config.color} font-medium cursor-pointer`}>
-                          {config.label}
-                        </span>
-                      );
+                      if (energyValue === "low") return "⚡ Low";
+                      if (energyValue === "medium") return "⚡⚡ Medium";
+                      if (energyValue === "high") return "⚡⚡⚡ High";
+                      return "⚡⚡ Medium";
                     })()}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent onClick={(e) => e.stopPropagation()}>
-                  <SelectItem value="low">
-                    <span className={`${ENERGY_CONFIG.low.color} font-medium`}>⚡ {ENERGY_CONFIG.low.fullLabel}</span>
-                  </SelectItem>
-                  <SelectItem value="medium">
-                    <span className={`${ENERGY_CONFIG.medium.color} font-medium`}>⚡⚡ {ENERGY_CONFIG.medium.fullLabel}</span>
-                  </SelectItem>
-                  <SelectItem value="high">
-                    <span className={`${ENERGY_CONFIG.high.color} font-medium`}>⚡⚡⚡ {ENERGY_CONFIG.high.fullLabel}</span>
-                  </SelectItem>
+                  <SelectItem value="low">⚡ Low</SelectItem>
+                  <SelectItem value="medium">⚡⚡ Medium</SelectItem>
+                  <SelectItem value="high">⚡⚡⚡ High</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -580,7 +626,7 @@ export default function SortableTaskCard({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-8 w-8 text-emerald-500 hover:text-emerald-400 hover:bg-emerald-500/10"
+                className="h-8 w-8 text-emerald-600 dark:text-emerald-500 hover:text-emerald-700 dark:hover:text-emerald-400 hover:bg-emerald-500/20 dark:hover:bg-emerald-500/10"
                 onClick={handleCompleteTask}
                 data-testid={`complete-task-${task.id}`}
                 title="Mark as done"

@@ -65,7 +65,7 @@ export default function LaterModal({
                     <div className="flex-1 min-w-0">
                       <h3 className="font-medium mb-1">{task.title}</h3>
                       {task.description && (
-                        <p className="text-sm text-muted-foreground line-clamp-2 mb-2">
+                        <p className="text-sm text-muted-foreground line-clamp-2 mb-2 whitespace-pre-line">
                           {task.description}
                         </p>
                       )}

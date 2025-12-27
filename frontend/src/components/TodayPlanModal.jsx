@@ -140,7 +140,7 @@ export default function TodayPlanModal({
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Suggested based on priority + urgency.
+              Suggested based on priority, urgency, and impakt.
             </p>
             <div className="space-y-2">
               {availableTasks.length === 0 ? (

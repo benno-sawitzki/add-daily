@@ -150,17 +150,13 @@ export default function CarryoverModal({
                   <div className="flex-1 min-w-0">
                     <h3 className="font-medium">{task.title}</h3>
                     {task.description && (
-                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                      <p className="text-sm text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">
                         {task.description}
                       </p>
                     )}
                     <div className="flex items-center gap-2 mt-2">
                       <span className="text-xs text-muted-foreground">
                         Priority: {task.priority}
-                      </span>
-                      <span className="text-xs text-muted-foreground">•</span>
-                      <span className="text-xs text-muted-foreground">
-                        Urgency: {task.urgency}
                       </span>
                     </div>
                   </div>

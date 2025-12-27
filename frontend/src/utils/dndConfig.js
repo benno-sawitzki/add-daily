@@ -7,12 +7,23 @@ import { PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 // Premium sensor configuration: requires 300ms hold + 5px movement tolerance
 // Note: This delay matches the progress ring animation duration in SortableTaskCard.
 // The 300ms delay provides clear feedback before drag activates.
+// For touchpads (especially Mac force feedback), we use shorter delay to avoid conflicts
 export const usePremiumSensors = () => {
+  // Better touchpad detection: check for fine pointer (touchpad/mouse) vs coarse (touchscreen)
+  // Mac trackpads report as 'fine' pointer with no touch support
+  const isTouchpad = typeof window !== 'undefined' && (
+    window.matchMedia('(pointer: fine)').matches &&
+    !window.matchMedia('(any-pointer: coarse)').matches &&
+    navigator.maxTouchPoints === 0
+  );
+  
   return useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        delay: 300,
-        tolerance: 5,
+        // Shorter delay for touchpads to avoid force feedback conflicts
+        // Higher tolerance helps prevent accidental drags from touchpad gestures
+        delay: isTouchpad ? 100 : 300,
+        tolerance: isTouchpad ? 10 : 5,
       },
     })
   );

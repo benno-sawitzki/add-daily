@@ -312,8 +312,7 @@ export default function NextControlCenter({
         title: text,
         description: "",
         priority: 2,
-        urgency: 2,
-        importance: 2,
+        impakt: null,
         status: "inbox",
       });
       if (onRefreshTasks) await onRefreshTasks();
@@ -392,6 +391,7 @@ export default function NextControlCenter({
               onCompleteTask={handleNextTaskCompletion}
               onEditTask={onEditTask}
               onMoveToInbox={onMoveToInbox}
+              onUpdateTask={onUpdateTask}
               doneButtonRef={doneButtonRef}
             />
           )}

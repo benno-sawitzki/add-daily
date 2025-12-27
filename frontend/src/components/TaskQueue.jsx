@@ -238,7 +238,7 @@ function SortableQueueItem({
                 </TooltipProvider>
               )}
               {task.description ? (
-                <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
+                <p className="text-sm text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">
                   {task.description}
                 </p>
               ) : (

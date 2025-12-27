@@ -211,7 +211,7 @@ const LandingPage = () => {
               {
                 icon: Sparkles,
                 title: "AI Prioritization",
-                description: "Automatically categorizes tasks by urgency and importance, ensuring you focus on what matters most.",
+                description: "Automatically categorizes tasks by priority and impakt, ensuring you focus on what matters most.",
                 gradient: "from-cyan-500 to-blue-500"
               },
               {
